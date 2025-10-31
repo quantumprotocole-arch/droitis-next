@@ -1,6 +1,6 @@
 // app/api/hello/route.ts
+import { NextResponse } from "next/server";
+
 export async function GET() {
-  return new Response(JSON.stringify({ ok: true, app: "droitis" }), {
-    headers: { "Content-Type": "application/json" },
-  });
+  return NextResponse.json({ ok: true, app: "droitis" });
 }
