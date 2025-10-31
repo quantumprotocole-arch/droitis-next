@@ -1,49 +1,53 @@
+// app/login/page.tsx
 "use client";
 
 import { useState } from "react";
 
 export default function LoginPage() {
-  const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [msg, setMsg] = useState("");
+  const [pwd, setPwd] = useState("");
 
-  async function handleSubmit(e: React.FormEvent) {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setMsg("Ici on branchera Supabase auth.");
-  }
+    alert("Ici on mettra Supabase auth (login/signup).");
+  };
 
   return (
-    <main style={{ maxWidth: 480, margin: "40px auto", padding: 16 }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 16 }}>Connexion / Inscription</h1>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <button onClick={() => setMode("login")} style={{ fontWeight: mode === "login" ? 600 : 400 }}>
-          Se connecter
-        </button>
-        <button onClick={() => setMode("signup")} style={{ fontWeight: mode === "signup" ? 600 : 400 }}>
-          Créer un compte
-        </button>
-      </div>
-      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <form
+        onSubmit={handleSubmit}
+        style={{ background: "white", padding: "2rem", borderRadius: 12, width: "100%", maxWidth: 420 }}
+      >
+        <h1 style={{ fontSize: "1.8rem", marginBottom: "1.5rem" }}>Connexion Droitis</h1>
+        <label style={{ display: "block", marginBottom: "0.5rem" }}>Courriel</label>
         <input
-          type="email"
-          placeholder="Email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          style={{ border: "1px solid #ddd", padding: 8, borderRadius: 6 }}
+          type="email"
+          required
+          style={{ width: "100%", padding: "0.6rem", marginBottom: "1rem", border: "1px solid #ddd", borderRadius: 8 }}
         />
+        <label style={{ display: "block", marginBottom: "0.5rem" }}>Mot de passe</label>
         <input
+          value={pwd}
+          onChange={(e) => setPwd(e.target.value)}
           type="password"
-          placeholder="Mot de passe"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          style={{ border: "1px solid #ddd", padding: 8, borderRadius: 6 }}
+          required
+          style={{ width: "100%", padding: "0.6rem", marginBottom: "1.5rem", border: "1px solid #ddd", borderRadius: 8 }}
         />
-        <button style={{ background: "black", color: "white", padding: "8px 16px", borderRadius: 6 }}>
-          {mode === "login" ? "Se connecter" : "Créer mon compte"}
+        <button
+          type="submit"
+          style={{ width: "100%", background: "black", color: "white", padding: "0.7rem", borderRadius: 8, border: "none" }}
+        >
+          Continuer
         </button>
+        <p style={{ marginTop: "1rem", fontSize: "0.85rem" }}>
+          Pas de compte ? Retour à la{" "}
+          <a href="/" style={{ textDecoration: "underline" }}>
+            page d’accueil
+          </a>
+        </p>
       </form>
-      {msg && <p style={{ marginTop: 12 }}>{msg}</p>}
-    </main>
+    </div>
   );
 }
