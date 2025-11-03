@@ -1,15 +1,17 @@
 // app/api/chat/route.ts
 /* eslint-disable no-console */
-export const runtime = 'nodejs';            // service role => Node runtime (pas Edge)
-export const dynamic = 'force-dynamic';     // éviter le cache côté Vercel
+export const runtime = 'nodejs';            // Service Role -> Node runtime (pas Edge)
+export const dynamic = 'force-dynamic';     // éviter tout cache côté Vercel
 
-// Types simples pour Supabase & payload
+// ------------------------------
+// Types & helpers
+// ------------------------------
 type VectorHit = {
   id?: string | number;
   document_id?: string | number;
   content?: string;
   metadata?: Record<string, any> | null;
-  similarity?: number | null; // selon votre RPC
+  similarity?: number | null; // si ton RPC la renvoie
 };
 
 type ChatRequest = {
@@ -19,7 +21,6 @@ type ChatRequest = {
   mode?: string | null;
 };
 
-// Helpers env
 const {
   OPENAI_API_KEY,
   SUPABASE_URL,
@@ -27,7 +28,7 @@ const {
 } = process.env;
 
 function json(data: any, init?: number | ResponseInit) {
-  return new Response(JSON.stringify(data), {
+  return new Response(JSON.stringify(data, null, 2), {
     status: typeof init === 'number' ? init : init?.status ?? 200,
     headers: {
       'content-type': 'application/json; charset=utf-8',
@@ -36,7 +37,6 @@ function json(data: any, init?: number | ResponseInit) {
   });
 }
 
-// CORS basique
 const CORS_HEADERS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'POST, OPTIONS',
@@ -47,7 +47,9 @@ export async function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS_HEADERS });
 }
 
-// --- OpenAI REST helpers (sans SDK) ---
+// ------------------------------
+// OpenAI REST (sans SDK)
+// ------------------------------
 async function createEmbedding(input: string) {
   if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY manquant');
   const res = await fetch('https://api.openai.com/v1/embeddings', {
@@ -57,7 +59,7 @@ async function createEmbedding(input: string) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'text-embedding-3-small',
+      model: 'text-embedding-3-small', // embeddings RAG économiques
       input,
     }),
   });
@@ -65,9 +67,7 @@ async function createEmbedding(input: string) {
     const err = await safeJson(res);
     throw new Error(`OpenAI embeddings error: ${res.status} ${res.statusText} — ${JSON.stringify(err)}`);
   }
-  const data = (await res.json()) as {
-    data: { embedding: number[] }[];
-  };
+  const data = (await res.json()) as { data: { embedding: number[] }[] };
   return data.data?.[0]?.embedding as number[] | undefined;
 }
 
@@ -97,12 +97,13 @@ async function safeJson(res: Response) {
   try { return await res.json(); } catch { return { error: 'non-json response' }; }
 }
 
+// ------------------------------
+// Route POST
+// ------------------------------
 export async function POST(req: Request) {
   try {
-    // 0) Validations env
-    if (!OPENAI_API_KEY) {
-      return json({ error: 'OPENAI_API_KEY manquant' }, 500);
-    }
+    // 0) Validation env
+    if (!OPENAI_API_KEY) return json({ error: 'OPENAI_API_KEY manquant' }, 500);
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
       return json({ error: 'SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant' }, 500);
     }
@@ -113,18 +114,13 @@ export async function POST(req: Request) {
     const profile = body.profile ?? null;
     const top_k = Math.max(1, Math.min(body.top_k ?? 5, 20));
     const mode = body.mode ?? 'default';
+    if (!message) return json({ error: 'message vide' }, 400);
 
-    if (!message) {
-      return json({ error: 'message vide' }, 400);
-    }
-
-    // 2) Embedding via OpenAI REST
+    // 2) Embedding
     const queryEmbedding = await createEmbedding(message);
-    if (!queryEmbedding) {
-      return json({ error: 'Échec embedding' }, 500);
-    }
+    if (!queryEmbedding) return json({ error: 'Échec embedding' }, 500);
 
-    // 3) Appel RPC Supabase (prioritaire)
+    // 3) D’abord RPC Supabase
     const rpcUrl = `${SUPABASE_URL}/rest/v1/rpc/search_legal_vector`;
     let hits: VectorHit[] | null = null;
     let rpcOk = true;
@@ -133,19 +129,19 @@ export async function POST(req: Request) {
       const rpcRes = await fetch(rpcUrl, {
         method: 'POST',
         headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          apikey: SUPABASE_SERVICE_ROLE_KEY!,
           Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
           'Content-Type': 'application/json',
           Prefer: 'count=none',
         },
         body: JSON.stringify({
-          // adaptez si votre RPC attend d’autres noms
           query_embedding: queryEmbedding,
           top_k,
           mode,
           profile,
         }),
       });
+
       if (!rpcRes.ok) {
         rpcOk = false;
       } else {
@@ -156,20 +152,18 @@ export async function POST(req: Request) {
       console.warn('RPC search_legal_vector a échoué:', e);
     }
 
-    // 4) Fallback REST sur legal_vectors si le RPC échoue
-    if (!rpcOk || !Array.isArray(hits)) {
+    // 4) Fallback REST (ilike) si RPC KO
+    if (!rpcOk || !Array.isArray(hits) || hits.length === 0) {
       const q = encodeURIComponent(message.slice(0, 200));
       const restUrl =
         `${SUPABASE_URL}/rest/v1/legal_vectors` +
         `?select=id,document_id,content,metadata&content=ilike.*${q}*&limit=${top_k * 2}`;
-
       const restRes = await fetch(restUrl, {
         headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          apikey: SUPABASE_SERVICE_ROLE_KEY!,
           Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
         },
       });
-
       if (restRes.ok) {
         const rows = (await restRes.json()) as VectorHit[];
         hits = rows?.slice(0, top_k) ?? [];
@@ -178,16 +172,24 @@ export async function POST(req: Request) {
       }
     }
 
-    // 5) Contexte priorisant Québec
+    // 5) Contexte (priorité QC > CA > autres, puis similarité)
     const sorted = (hits ?? []).slice().sort((a, b) => {
-      const aj = (a.metadata?.jurisdiction ?? a.metadata?.province ?? '').toString().toUpperCase();
-      const bj = (b.metadata?.jurisdiction ?? b.metadata?.province ?? '').toString().toUpperCase();
-      const aIsQC = aj.includes('QC') || aj.includes('QUÉBEC') || aj.includes('QUEBEC');
-      const bIsQC = bj.includes('QC') || bj.includes('QUÉBEC') || bj.includes('QUEBEC');
-      if (aIsQC && !bIsQC) return -1;
-      if (!aIsQC && bIsQC) return 1;
-      const as = typeof a.similarity === 'number' ? a.similarity : 999;
-      const bs = typeof b.similarity === 'number' ? b.similarity : 999;
+      const aj = (a.metadata?.jurisdiction ?? a.metadata?.province ?? '').toString().toLowerCase();
+      const bj = (b.metadata?.jurisdiction ?? b.metadata?.province ?? '').toString().toLowerCase();
+
+      const scoreJur = (j: string) =>
+        j.includes('québec') || j.includes('quebec') || j.includes('qc')
+          ? 2
+          : (j.includes('canada') || j.includes('ca'))
+          ? 1
+          : 0;
+
+      const ja = scoreJur(aj);
+      const jb = scoreJur(bj);
+      if (ja !== jb) return jb - ja; // QC (2) > CA (1) > autres (0)
+
+      const as = typeof a.similarity === 'number' ? a.similarity : 999999;
+      const bs = typeof b.similarity === 'number' ? b.similarity : 999999;
       return as - bs;
     });
 
@@ -213,7 +215,7 @@ export async function POST(req: Request) {
       })
       .join('\n\n');
 
-    // 6) Appel OpenAI Chat (REST) : réponse IRAC/ILAC
+    // 6) Génération (IRAC/ILAC)
     const systemPrompt = [
       'Tu es Droitis, un tuteur IA spécialisé en droit québécois.',
       'Formate en IRAC/ILAC (Issue/Rule/Application/Conclusion).',
@@ -241,33 +243,51 @@ export async function POST(req: Request) {
       { role: 'user', content: userPrompt },
     ]);
 
-    // 7) Log best-effort
+    // 7) Logs (mapping conforme à public.logs)
+    const path =
+      rpcOk && Array.isArray(hits) && hits.length > 0
+        ? 'rpc'
+        : Array.isArray(hits) && hits.length > 0
+          ? 'fallback'
+          : 'llm_only';
+
     try {
+      const logBody = {
+        created_at: new Date().toISOString(), // timestamp
+        question: message,                    // text
+        profile_slug: profile ?? null,        // text
+        top_k,                                // int
+        top_ids: null,                        // si tu n’as pas la liste des ids
+        response: { answer, sources, path },  // jsonb
+        usage: { rpcOk, mode },               // jsonb
+        // user_id: null,                     // si nullable
+      };
+
       const logRes = await fetch(`${SUPABASE_URL}/rest/v1/logs`, {
         method: 'POST',
         headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          apikey: SUPABASE_SERVICE_ROLE_KEY!,
           Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
           'Content-Type': 'application/json',
-          Prefer: 'return=minimal',
+          Prefer: 'return=representation', // utile pour lire l'erreur si 4xx
         },
-        body: JSON.stringify({
-          created_at: new Date().toISOString(),
-          profile,
-          message,
-          mode,
-          meta: { top_k, rpcOk },
-        }),
+        body: JSON.stringify(logBody),
       });
-      if (!logRes.ok) console.warn('Insertion logs échouée (non bloquant).');
+
+      if (!logRes.ok) {
+        const errTxt = await logRes.text().catch(() => '');
+        console.warn('Insertion logs échouée:', logRes.status, errTxt);
+      }
     } catch (e) {
       console.warn('Erreur log (non bloquant):', e);
     }
 
+    // 8) Réponse
     return json(
       {
         answer: answer?.trim() || 'Je n’ai pas pu générer une réponse.',
         sources,
+        path, // "rpc" | "fallback" | "llm_only"
         usage: { top_k, rpcOk },
       },
       { status: 200, headers: CORS_HEADERS }
