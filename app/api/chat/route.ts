@@ -152,22 +152,43 @@ export async function POST(req: Request) {
       console.warn('RPC search_legal_vectors_dev a échoué:', e);
     }
 
-    // 4) Fallback REST (ilike) si RPC KO
-    if (!rpcOk || !Array.isArray(hits) || hits.length === 0) {
-      const q = encodeURIComponent(message.slice(0, 120));
-      const restUrl =
-        `${SUPABASE_URL}/rest/v1/legal_vectors_dev`
-        + `?select=id,code_id,jurisdiction,citation,title,text`
-        + `&text=ilike.*${q}*`
-        + `&limit=${top_k * 2}`;
+// 4) Fallback REST (robuste) si RPC KO
+if (!rpcOk || !Array.isArray(hits) || hits.length === 0) {
+  // 1- on extrait quelques tokens simples (ex: nombres d’article)
+  const tokens = (message.match(/\d{2,4}/g) || []).slice(0, 3); // ex: ["1457"]
+  const qBasic = encodeURIComponent(message.slice(0, 80));
 
-      const restRes = await fetch(restUrl, {
-        headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY!,
-          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        },
-      });
+  // 2- requête OR sur plusieurs colonnes
+  //    citation/title/text pour maximiser les chances de match
+  const orParts = [
+    `citation.ilike.*${qBasic}*`,
+    `title.ilike.*${qBasic}*`,
+    `text.ilike.*${qBasic}*`,
+    ...tokens.map(t => `citation.ilike.*${t}*`),
+    ...tokens.map(t => `text.ilike.*${t}*`),
+  ];
+  const orParam = encodeURIComponent(orParts.join(','));
 
+  const restUrl =
+    `${SUPABASE_URL}/rest/v1/legal_vectors_dev` +
+    `?select=id,code_id,jurisdiction,citation,title,text` +
+    `&or=(${orParam})` +
+    `&limit=${top_k * 4}`;
+
+  const restRes = await fetch(restUrl, {
+    headers: {
+      apikey: SUPABASE_SERVICE_ROLE_KEY!,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    },
+  });
+
+  if (restRes.ok) {
+    const rows = (await restRes.json()) as VectorHit[];
+    hits = rows?.slice(0, top_k) ?? [];
+  } else {
+    hits = [];
+  }
+}
       if (restRes.ok) {
         const rows = (await restRes.json()) as VectorHit[];
         hits = rows?.slice(0, top_k) ?? [];
