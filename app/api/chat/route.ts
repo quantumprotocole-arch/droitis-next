@@ -7,11 +7,13 @@ export const dynamic = 'force-dynamic';     // éviter tout cache côté Vercel
 // Types & helpers
 // ------------------------------
 type VectorHit = {
-  id?: string | number;
-  document_id?: string | number;
-  content?: string;
-  metadata?: Record<string, any> | null;
-  similarity?: number | null; // si ton RPC la renvoie
+  id?: number | string;
+  code_id?: string | null;
+  jurisdiction?: string | null;
+  citation?: string | null;
+  title?: string | null;
+  text?: string | null;
+  similarity?: number | null; // renvoyée par le RPC
 };
 
 type ChatRequest = {
@@ -59,7 +61,7 @@ async function createEmbedding(input: string) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'text-embedding-3-small', // embeddings RAG économiques
+      model: 'text-embedding-3-small',
       input,
     }),
   });
@@ -120,8 +122,8 @@ export async function POST(req: Request) {
     const queryEmbedding = await createEmbedding(message);
     if (!queryEmbedding) return json({ error: 'Échec embedding' }, 500);
 
-    // 3) D’abord RPC Supabase
-    const rpcUrl = `${process.env.SUPABASE_URL}/rest/v1/rpc/search_legal_vector_dev`;
+    // 3) D’abord RPC Supabase (DEV)
+    const rpcUrl = `${SUPABASE_URL}/rest/v1/rpc/search_legal_vectors_dev`;
     let hits: VectorHit[] | null = null;
     let rpcOk = true;
 
@@ -135,10 +137,8 @@ export async function POST(req: Request) {
           Prefer: 'count=none',
         },
         body: JSON.stringify({
-          query_embedding: queryEmbedding,
-          top_k,
-          mode,
-          profile,
+          query_embedding: queryEmbedding,  // tableau de float
+          match_count: top_k,               // signature exacte du RPC
         }),
       });
 
@@ -149,21 +149,25 @@ export async function POST(req: Request) {
       }
     } catch (e) {
       rpcOk = false;
-      console.warn('RPC search_legal_vector a échoué:', e);
+      console.warn('RPC search_legal_vectors_dev a échoué:', e);
     }
 
     // 4) Fallback REST (ilike) si RPC KO
     if (!rpcOk || !Array.isArray(hits) || hits.length === 0) {
-      const q = encodeURIComponent(message.slice(0, 200));
+      const q = encodeURIComponent(message.slice(0, 120));
       const restUrl =
-        `${SUPABASE_URL}/rest/v1/legal_vectors` +
-        `?select=id,document_id,content,metadata&content=ilike.*${q}*&limit=${top_k * 2}`;
+        `${SUPABASE_URL}/rest/v1/legal_vectors_dev`
+        + `?select=id,code_id,jurisdiction,citation,title,text`
+        + `&text=ilike.*${q}*`
+        + `&limit=${top_k * 2}`;
+
       const restRes = await fetch(restUrl, {
         headers: {
           apikey: SUPABASE_SERVICE_ROLE_KEY!,
           Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
         },
       });
+
       if (restRes.ok) {
         const rows = (await restRes.json()) as VectorHit[];
         hits = rows?.slice(0, top_k) ?? [];
@@ -174,44 +178,34 @@ export async function POST(req: Request) {
 
     // 5) Contexte (priorité QC > CA > autres, puis similarité)
     const sorted = (hits ?? []).slice().sort((a, b) => {
-      const aj = (a.metadata?.jurisdiction ?? a.metadata?.province ?? '').toString().toLowerCase();
-      const bj = (b.metadata?.jurisdiction ?? b.metadata?.province ?? '').toString().toLowerCase();
+      const aj = (a.jurisdiction ?? '').toUpperCase();
+      const bj = (b.jurisdiction ?? '').toUpperCase();
 
-      const scoreJur = (j: string) =>
-        j.includes('québec') || j.includes('quebec') || j.includes('qc')
-          ? 2
-          : (j.includes('canada') || j.includes('ca'))
-          ? 1
-          : 0;
+      const aQC = aj.includes('QC') || aj.includes('QUÉBEC') || aj.includes('QUEBEC');
+      const bQC = bj.includes('QC') || bj.includes('QUÉBEC') || bj.includes('QUEBEC');
+      if (aQC && !bQC) return -1;
+      if (!aQC && bQC) return 1;
 
-      const ja = scoreJur(aj);
-      const jb = scoreJur(bj);
-      if (ja !== jb) return jb - ja; // QC (2) > CA (1) > autres (0)
-
-      const as = typeof a.similarity === 'number' ? a.similarity : 999999;
-      const bs = typeof b.similarity === 'number' ? b.similarity : 999999;
+      const as = typeof a.similarity === 'number' ? a.similarity : 1e9;
+      const bs = typeof b.similarity === 'number' ? b.similarity : 1e9;
       return as - bs;
     });
 
     const topContext = sorted.slice(0, top_k);
 
-    const sources = topContext.map((h, idx) => {
-      const m = h.metadata ?? {};
-      return {
-        id: h.id ?? h.document_id ?? `S${idx + 1}`,
-        title: m.title ?? m.citation ?? m.name ?? null,
-        citation: m.citation ?? null,
-        jurisdiction: m.jurisdiction ?? m.province ?? null,
-        url: m.url ?? m.link ?? null,
-      };
-    });
+    const sources = topContext.map((h, idx) => ({
+      id: h.id ?? `S${idx + 1}`,
+      title: h.title ?? h.citation ?? null,
+      citation: h.citation ?? null,
+      jurisdiction: h.jurisdiction ?? null,
+      url: null, // liens canlii/doc officiels ajoutés en Phase 4
+    }));
 
     const contextText = topContext
       .map((h, i) => {
-        const m = h.metadata ?? {};
-        const head = m.citation || m.title || m.name || `Source ${i + 1}`;
-        const jur = m.jurisdiction || m.province || '';
-        return `• [${head}] (${jur})\n${(h.content ?? '').slice(0, 1200)}`;
+        const head = h.citation || h.title || `Source ${i + 1}`;
+        const jur = h.jurisdiction || '';
+        return `• [${head}] (${jur})\n${(h.text ?? '').slice(0, 1200)}`;
       })
       .join('\n\n');
 
@@ -252,28 +246,24 @@ export async function POST(req: Request) {
           : 'llm_only';
 
     try {
-      const logBody = {
-        created_at: new Date().toISOString(), // timestamp
-        question: message,                    // text
-        profile_slug: profile ?? null,        // text
-        top_k,                                // int
-        top_ids: null,                        // si tu n’as pas la liste des ids
-        response: { answer, sources, path },  // jsonb
-        usage: { rpcOk, mode },               // jsonb
-        // user_id: null,                     // si nullable
-      };
-
       const logRes = await fetch(`${SUPABASE_URL}/rest/v1/logs`, {
         method: 'POST',
         headers: {
           apikey: SUPABASE_SERVICE_ROLE_KEY!,
           Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
           'Content-Type': 'application/json',
-          Prefer: 'return=representation', // utile pour lire l'erreur si 4xx
+          Prefer: 'return=minimal',
         },
-        body: JSON.stringify(logBody),
+        body: JSON.stringify({
+          question: message,
+          profile_slug: profile ?? null,
+          top_ids: (topContext ?? []).map(h => h.id ?? null),
+          response: { answer, sources, path },
+          usage:    { rpcOk, mode, top_k },
+          // created_at par défaut, user_id nullable
+          user_id: null,
+        }),
       });
-
       if (!logRes.ok) {
         const errTxt = await logRes.text().catch(() => '');
         console.warn('Insertion logs échouée:', logRes.status, errTxt);
