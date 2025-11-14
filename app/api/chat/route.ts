@@ -121,21 +121,27 @@ export async function POST(req: Request) {
     if (!queryEmbedding) return json({ error: 'Échec embedding' }, 500);
 
     // 3) D’abord RPC Supabase
-    const rpcUrl = `${SUPABASE_URL}/rest/v1/rpc/search_legal_vectors_dev`;
+    const rpcUrl = `${process.env.SUPABASE_URL}/rest/v1/rpc/search_legal_vector_dev`;
+    let hits: VectorHit[] | null = null;
+    let rpcOk = true;
 
-const rpcRes = await fetch(rpcUrl, {
-  method: 'POST',
-  headers: {
-    apikey: SUPABASE_SERVICE_ROLE_KEY!,
-    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-    'Content-Type': 'application/json',
-    Prefer: 'count=none',
-  },
-  body: JSON.stringify({
-    query_embedding: queryEmbedding,  // tableau de float
-    match_count: top_k                 // <-- nom exact attendu par ta fonction
-  }),
-});
+    try {
+      const rpcRes = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY!,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          'Content-Type': 'application/json',
+          Prefer: 'count=none',
+        },
+        body: JSON.stringify({
+          query_embedding: queryEmbedding,
+          top_k,
+          mode,
+          profile,
+        }),
+      });
+
       if (!rpcRes.ok) {
         rpcOk = false;
       } else {
