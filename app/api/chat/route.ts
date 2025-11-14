@@ -121,7 +121,7 @@ export async function POST(req: Request) {
     if (!queryEmbedding) return json({ error: 'Échec embedding' }, 500);
 
     // 3) D’abord RPC Supabase
-    const rpcUrl = `${SUPABASE_URL}/rest/v1/rpc/search_legal_vector`;
+    const rpcUrl = `${process.env.SUPABASE_URL}/rest/v1/rpc/search_legal_vector_dev`;
     let hits: VectorHit[] | null = null;
     let rpcOk = true;
 
