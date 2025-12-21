@@ -1,0 +1,8 @@
+/* app/globals.css */
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #fff;
+}
+a {
+  text-decoration: none;
+}
