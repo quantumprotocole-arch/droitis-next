@@ -1,0 +1,4 @@
+// app/app/page.tsx
+export default function TestPage() {
+  return <h1>APP OK</h1>
+}

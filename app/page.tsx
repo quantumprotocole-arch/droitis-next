@@ -1,4 +1,4 @@
-// app/page.tsx (Server Component)
+// app/page.tsx
 import { Suspense } from 'react'
 import LandingClient from './LandingClient'
 

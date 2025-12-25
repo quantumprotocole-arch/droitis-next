@@ -1,167 +1,335 @@
-// app/login/page.tsx
-'use client'
+// app/LandingClient.tsx
+'use client';
 
-import { useMemo, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
-import { createClient } from '../lib/supabase/client'
+import React, { useCallback, useMemo, useState } from 'react';
 
+type Source = {
+  id?: string | number;
+  title?: string | null;
+  citation?: string | null;
+  jurisdiction?: string | null;
+  url?: string | null;
+};
 
-type Mode = 'login' | 'signup' | 'reset'
+type ApiResponse =
+  | {
+      answer: string;
+      sources: Source[];
+      usage?: { top_k?: number; rpcOk?: boolean };
+    }
+  | {
+      error: string;
+      details?: string;
+    };
 
-export default function LoginPage() {
-  const router = useRouter()
-  const sp = useSearchParams()
-  const reason = sp.get('reason')
+export default function HomePage() {
+  const [message, setMessage] = useState('Explique l’art. 1457 C.c.Q.');
+  const [profile, setProfile] = useState<string>('');
+  const [topK, setTopK] = useState<number>(5);
+  const [mode, setMode] = useState<string>('default');
 
-  const supabase = useMemo(() => createClient(), [])
+  const [loading, setLoading] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
 
-  const [mode, setMode] = useState<Mode>('login')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [answer, setAnswer] = useState<string>('');
+  const [sources, setSources] = useState<Source[]>([]);
+  const [usage, setUsage] = useState<{ top_k?: number; rpcOk?: boolean } | undefined>(undefined);
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setLoading(true)
-    setError(null)
-    setMessage(null)
+  const canSend = useMemo(() => message.trim().length > 0 && !loading, [message, loading]);
+
+  const send = useCallback(async () => {
+    if (!canSend) return;
+    setLoading(true);
+    setServerError(null);
+    setAnswer('');
+    setSources([]);
+    setUsage(undefined);
 
     try {
-      const origin = window.location.origin
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          profile: profile || null,
+          top_k: Math.max(1, Math.min(Number(topK) || 5, 20)),
+          mode,
+        }),
+      });
 
-      if (mode === 'login') {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        })
-        if (signInError) throw signInError
+      const data: ApiResponse = await res.json();
 
-        router.push('/app')
-        router.refresh()
-        return
+      if (!res.ok) {
+        const msg =
+          'error' in data && data.error
+            ? data.error
+            : `Erreur API (${res.status})`;
+        setServerError(`${msg}${'details' in data && data.details ? ` — ${data.details}` : ''}`);
+        return;
       }
 
-      if (mode === 'signup') {
-        const { error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            emailRedirectTo: `${origin}/auth/callback?next=/app`,
-          },
-        })
-        if (signUpError) throw signUpError
-
-        setMessage('Compte créé. Vérifie ton email pour confirmer.')
-        return
+      if ('answer' in data) {
+        setAnswer(data.answer || '');
+        setSources(Array.isArray(data.sources) ? data.sources : []);
+        setUsage(data.usage);
+      } else {
+        setServerError('Réponse inattendue du serveur.');
       }
-
-      // reset
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${origin}/auth/callback?next=/reset-password`,
-      })
-      if (resetError) throw resetError
-
-      setMessage('Email de réinitialisation envoyé (si le compte existe).')
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Erreur. Réessaie.')
+    } catch (err: any) {
+      setServerError(err?.message ?? String(err));
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  }, [canSend, message, profile, topK, mode]);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      send();
+    }
+  };
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-md flex-col justify-center p-6">
-      <h1 className="text-2xl font-semibold">Authentification</h1>
+    <main style={styles.main}>
+      <div style={styles.card}>
+        <h1 style={{ margin: 0 }}>Droitis — Phase 1</h1>
+        <p style={{ marginTop: 8, opacity: 0.8 }}>
+          Next.js → /api/chat → Supabase (RAG) → OpenAI → JSON
+        </p>
 
-      {reason === 'auth' && (
-        <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          Tu dois être connecté pour accéder à /app ou /diag.
-        </p>
-      )}
-      {reason === 'logout' && (
-        <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-900">
-          Tu es déconnecté.
-        </p>
-      )}
-      {reason === 'reset_done' && (
-        <p className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-          Mot de passe mis à jour. Tu peux te reconnecter.
-        </p>
-      )}
-
-      {message && (
-        <p className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-          {message}
-        </p>
-      )}
-      {error && (
-        <p className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-900">
-          {error}
-        </p>
-      )}
-
-      <form onSubmit={onSubmit} className="mt-6 space-y-4">
-        <label className="block">
-          <span className="text-sm font-medium">Email</span>
-          <input
-            className="mt-1 w-full rounded-md border px-3 py-2"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </label>
-
-        {mode !== 'reset' && (
-          <label className="block">
-            <span className="text-sm font-medium">Mot de passe</span>
-            <input
-              className="mt-1 w-full rounded-md border px-3 py-2"
-              type="password"
-              autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={8}
-            />
+        <div style={styles.formRow}>
+          <label htmlFor="message" style={styles.label}>
+            Question
           </label>
+          <textarea
+            id="message"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Pose ta question (ex: Explique l’art. 1457 C.c.Q.)"
+            rows={6}
+            style={styles.textarea}
+          />
+          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+            Astuce: <kbd>Ctrl/⌘</kbd> + <kbd>Enter</kbd> pour envoyer
+          </div>
+        </div>
+
+        <div style={styles.grid}>
+          <div style={styles.formCol}>
+            <label htmlFor="profile" style={styles.label}>
+              Profil (facultatif)
+            </label>
+            <input
+              id="profile"
+              type="text"
+              value={profile}
+              onChange={(e) => setProfile(e.target.value)}
+              placeholder="ex: etudiant_l1"
+              style={styles.input}
+            />
+          </div>
+
+          <div style={styles.formCol}>
+            <label htmlFor="topK" style={styles.label}>
+              top_k
+            </label>
+            <input
+              id="topK"
+              type="number"
+              min={1}
+              max={20}
+              value={topK}
+              onChange={(e) => setTopK(Number(e.target.value))}
+              style={styles.input}
+            />
+          </div>
+
+          <div style={styles.formCol}>
+            <label htmlFor="mode" style={styles.label}>
+              mode
+            </label>
+            <select
+              id="mode"
+              value={mode}
+              onChange={(e) => setMode(e.target.value)}
+              style={styles.input}
+            >
+              <option value="default">default</option>
+              <option value="concise">concise</option>
+              <option value="detailed">detailed</option>
+            </select>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+          <button
+            onClick={send}
+            disabled={!canSend}
+            style={{
+              ...styles.button,
+              opacity: canSend ? 1 : 0.6,
+              cursor: canSend ? 'pointer' : 'not-allowed',
+            }}
+          >
+            {loading ? 'Envoi…' : 'Envoyer'}
+          </button>
+          <button
+            onClick={() => {
+              setMessage('');
+              setAnswer('');
+              setSources([]);
+              setServerError(null);
+            }}
+            style={{ ...styles.button, background: '#e5e7eb', color: '#111827' }}
+          >
+            Réinitialiser
+          </button>
+        </div>
+
+        {serverError && (
+          <div style={styles.errorBox}>
+            <strong>Erreur :</strong> {serverError}
+          </div>
         )}
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded-md bg-black px-4 py-2 text-white disabled:opacity-60"
-        >
-          {loading
-            ? '...'
-            : mode === 'login'
-              ? 'Se connecter'
-              : mode === 'signup'
-                ? 'Créer un compte'
-                : 'Envoyer le lien de reset'}
-        </button>
-      </form>
+        {answer && (
+          <section style={styles.result}>
+            <h2 style={{ marginTop: 0 }}>Réponse</h2>
+            <div style={styles.answer}>{answer}</div>
 
-      <div className="mt-6 flex flex-col gap-2 text-sm">
-        {mode !== 'login' && (
-          <button className="text-left underline" onClick={() => setMode('login')}>
-            Déjà un compte ? Se connecter
-          </button>
-        )}
-        {mode !== 'signup' && (
-          <button className="text-left underline" onClick={() => setMode('signup')}>
-            Créer un compte
-          </button>
-        )}
-        {mode !== 'reset' && (
-          <button className="text-left underline" onClick={() => setMode('reset')}>
-            Mot de passe oublié
-          </button>
+            {Array.isArray(sources) && sources.length > 0 && (
+              <>
+                <h3>Sources</h3>
+                <ul style={{ paddingLeft: 18, marginTop: 8 }}>
+                  {sources.map((s, i) => (
+                    <li key={`${s.id ?? i}`} style={{ marginBottom: 4 }}>
+                      {s.title || s.citation || `Source ${i + 1}`}
+                      {s.jurisdiction ? ` — ${s.jurisdiction}` : ''}
+                      {s.url ? (
+                        <>
+                          {' '}
+                          —{' '}
+                          <a href={s.url} target="_blank" rel="noreferrer">
+                            lien
+                          </a>
+                        </>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {usage && (
+              <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>
+                Debug: top_k={usage.top_k ?? '-'} | rpcOk={String(usage.rpcOk)}
+              </div>
+            )}
+          </section>
         )}
       </div>
-    </div>
-  )
+
+      <footer style={styles.footer}>
+        <small>
+          Front = clé anonyme uniquement. La Service Role Key reste strictement côté serveur
+          (/api/chat).
+        </small>
+      </footer>
+    </main>
+  );
 }
+
+const styles: Record<string, React.CSSProperties> = {
+  main: {
+    minHeight: '100dvh',
+    display: 'grid',
+    placeItems: 'center',
+    padding: 16,
+    background: '#0b1220',
+    color: 'white',
+  },
+  card: {
+    width: '100%',
+    maxWidth: 860,
+    background: 'white',
+    color: '#111827',
+    borderRadius: 12,
+    padding: 20,
+    boxShadow:
+      '0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05)',
+  },
+  formRow: {
+    marginTop: 12,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: 600,
+  },
+  textarea: {
+    width: '100%',
+    resize: 'vertical',
+    padding: 10,
+    border: '1px solid #e5e7eb',
+    borderRadius: 8,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    fontSize: 14,
+    lineHeight: 1.4,
+  },
+  grid: {
+    display: 'grid',
+    gap: 12,
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    marginTop: 12,
+  },
+  formCol: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+  },
+  input: {
+    width: '100%',
+    padding: 10,
+    border: '1px solid #e5e7eb',
+    borderRadius: 8,
+    fontSize: 14,
+  },
+  button: {
+    padding: '10px 14px',
+    borderRadius: 8,
+    background: '#111827',
+    color: 'white',
+    border: 'none',
+    fontWeight: 600,
+  },
+  errorBox: {
+    marginTop: 16,
+    padding: 12,
+    borderRadius: 8,
+    background: '#fee2e2',
+    color: '#7f1d1d',
+    border: '1px solid #fecaca',
+  },
+  result: {
+    marginTop: 18,
+    paddingTop: 8,
+    borderTop: '1px solid #e5e7eb',
+  },
+  answer: {
+    whiteSpace: 'pre-wrap',
+    fontSize: 15,
+    lineHeight: 1.5,
+    background: '#f9fafb',
+    border: '1px solid #e5e7eb',
+    borderRadius: 8,
+    padding: 12,
+  },
+  footer: {
+    marginTop: 18,
+    opacity: 0.7,
+    textAlign: 'center',
+  },
+};
