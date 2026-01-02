@@ -22,6 +22,11 @@ function getSupabaseAdmin() {
 
 // Permet de tester dans le navigateur sans déclencher un POST
 export async function GET() {
+  // ✅ le return doit être dans la fonction
+  if (process.env.VERCEL_ENV === 'production') {
+    return new Response('Not Found', { status: 404 });
+  }
+
   return NextResponse.json(
     {
       ok: false,
@@ -94,7 +99,7 @@ export async function POST(req: Request) {
     }
 
     // 4) create checkout session (subscription)
-    // Stripe API: Checkout Session create. :contentReference[oaicite:3]{index=3}
+    // Stripe API: Checkout Session create. :contentReference[oaicite:1]{index=1}
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       customer: customerId,
@@ -113,10 +118,8 @@ export async function POST(req: Request) {
 
     return NextResponse.redirect(session.url, { status: 303 });
   } catch (err: any) {
-    // Important: visible dans Vercel Functions Logs
     console.error('[stripe.checkout] unhandled', err);
 
-    // Stripe errors: souvent "No such price" quand price/test-live mismatch
     const stripeMsg =
       err && typeof err === 'object' && 'message' in err ? String((err as any).message) : null;
 
