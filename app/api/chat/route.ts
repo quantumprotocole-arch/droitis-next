@@ -16,7 +16,10 @@ type VectorHit = {
   citation?: string | null
   title?: string | null
   text?: string | null
+  // Selon RPC, peut s'appeler similarity (distance) ou distance
   similarity?: number | null
+  distance?: number | null
+  url?: string | null
 }
 
 type Source = {
@@ -31,7 +34,7 @@ type ChatRequest = {
   message?: string
   profile?: string | null
   top_k?: number | null
-  mode?: string | null
+  mode?: string | null // "dev" pour forcer dev, sinon prod par défaut
 }
 
 const { OPENAI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env
@@ -121,14 +124,12 @@ async function createChatCompletion(
 // ------------------------------
 export async function POST(req: Request) {
   // ✅ 0) Auth gate (bloque appels non connectés)
-  // getUser() fait un appel réseau à Supabase Auth et est approprié pour l’authorization. :contentReference[oaicite:2]{index=2}
   const supabase = createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
   if (!user) {
-    // Next route handlers: renvoyer JSON via NextResponse est standard. :contentReference[oaicite:3]{index=3}
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401, headers: CORS_HEADERS })
   }
 
@@ -144,15 +145,20 @@ export async function POST(req: Request) {
     const message = (body.message ?? '').trim()
     const profile = body.profile ?? null
     const top_k = Math.max(1, Math.min(body.top_k ?? 5, 20))
-    const mode = body.mode ?? 'default'
+    const mode = (body.mode ?? 'prod').toLowerCase()
     if (!message) return json({ error: 'message vide' }, 400)
 
     // 3) Embedding
     const queryEmbedding = await createEmbedding(message)
     if (!queryEmbedding) return json({ error: 'Échec embedding' }, 500)
 
-    // 4) RPC prioritaire (DEV)
-    const rpcUrl = `${SUPABASE_URL}/rest/v1/rpc/search_legal_vectors_dev`
+    // 4) Choix cible: PROD par défaut, DEV si mode="dev"
+    const isDev = mode === 'dev'
+    const rpcName = isDev ? 'search_legal_vectors_dev' : 'search_legal_vectors_v2'
+    const restTable = isDev ? 'legal_vectors_dev' : 'legal_vectors'
+
+    // 5) RPC prioritaire (PROD v2 par défaut)
+    const rpcUrl = `${SUPABASE_URL}/rest/v1/rpc/${rpcName}`
     let hits: VectorHit[] | null = null
     let rpcOk = true
 
@@ -173,19 +179,21 @@ export async function POST(req: Request) {
 
       if (!rpcRes.ok) {
         rpcOk = false
+        const t = await rpcRes.text().catch(() => '')
+        console.warn(`RPC ${rpcName} a échoué:`, rpcRes.status, t)
       } else {
         hits = (await rpcRes.json()) as VectorHit[]
       }
     } catch (e) {
       rpcOk = false
-      console.warn('RPC search_legal_vectors_dev a échoué:', e)
+      console.warn(`RPC ${rpcName} a échoué (exception):`, e)
     }
 
-    // 5) Fallback REST si RPC KO
+    // 6) Fallback REST si RPC KO ou 0 hit
     if (!rpcOk || !Array.isArray(hits) || hits.length === 0) {
       const q = encodeURIComponent(message.slice(0, 120))
       const restUrl =
-        `${SUPABASE_URL}/rest/v1/legal_vectors_dev` +
+        `${SUPABASE_URL}/rest/v1/${restTable}` +
         `?select=id,code_id,jurisdiction,citation,title,text` +
         `&text=ilike.*${q}*` +
         `&limit=${top_k * 2}`
@@ -201,11 +209,13 @@ export async function POST(req: Request) {
         const rows = (await restRes.json()) as VectorHit[]
         hits = rows?.slice(0, top_k) ?? []
       } else {
+        const t = await restRes.text().catch(() => '')
+        console.warn(`REST fallback ${restTable} a échoué:`, restRes.status, t)
         hits = []
       }
     }
 
-    // 6) Contexte (priorité QC > CA > autres, puis similarité)
+    // 7) Contexte (priorité QC > CA > autres, puis distance asc)
     const sorted = (hits ?? []).slice().sort((a, b) => {
       const aj = (a.jurisdiction ?? '').toUpperCase()
       const bj = (b.jurisdiction ?? '').toUpperCase()
@@ -213,7 +223,7 @@ export async function POST(req: Request) {
       const score = (j: string) =>
         j.includes('QUÉBEC') || j.includes('QUEBEC') || j.includes('QC')
           ? 2
-          : j.includes('CANADA') || j === 'CA'
+          : j.includes('CANADA') || j === 'CA' || j.includes('CA-FED')
             ? 1
             : 0
 
@@ -221,9 +231,21 @@ export async function POST(req: Request) {
       const sb = score(bj)
       if (sa !== sb) return sb - sa
 
-      const as = typeof a.similarity === 'number' ? a.similarity : 999999
-      const bs = typeof b.similarity === 'number' ? b.similarity : 999999
-      return as - bs
+      const ad =
+        typeof a.similarity === 'number'
+          ? a.similarity
+          : typeof a.distance === 'number'
+            ? a.distance
+            : 999999
+
+      const bd =
+        typeof b.similarity === 'number'
+          ? b.similarity
+          : typeof b.distance === 'number'
+            ? b.distance
+            : 999999
+
+      return ad - bd
     })
 
     const topContext = sorted.slice(0, top_k)
@@ -233,7 +255,7 @@ export async function POST(req: Request) {
       title: h.title ?? h.citation ?? null,
       citation: h.citation ?? null,
       jurisdiction: h.jurisdiction ?? null,
-      url: null,
+      url: h.url ?? null,
     }))
 
     const contextText =
@@ -245,12 +267,13 @@ export async function POST(req: Request) {
         })
         .join('\n\n') || '— Aucun extrait disponible (RAG indisponible).'
 
-    // 7) Génération (IRAC/ILAC)
+    // 8) Génération (IRAC/ILAC)
     const systemPrompt = [
       'Tu es Droitis, un tuteur IA spécialisé en droit québécois.',
       'Formate tes réponses en IRAC/ILAC (Issue/Rule/Application/Conclusion).',
-      'Toujours préciser la juridiction (prioriser Québec) et citer les sources fournies.',
-      'Si le contexte est faible, explique les limites et propose des pistes.',
+      'Toujours préciser la juridiction (prioriser Québec) et citer uniquement les sources fournies.',
+      'Interdiction d’inventer une loi, un article ou une décision: si absent des sources, dire que le corpus est insuffisant.',
+      'Si le contexte est faible, explique les limites et propose quoi ajouter.',
       'Langue: la même que la question (français).',
     ].join(' ')
 
@@ -262,7 +285,7 @@ export async function POST(req: Request) {
       '',
       'Consignes:',
       '- Identifier la question juridique.',
-      '- Énoncer les règles pertinentes (C.c.Q., jurisprudence) avec la juridiction.',
+      '- Énoncer les règles pertinentes avec la juridiction.',
       '- Appliquer aux faits implicites.',
       '- Conclure clairement.',
       '- Lister les sources citées (titre/citation).',
@@ -273,12 +296,12 @@ export async function POST(req: Request) {
       { role: 'user', content: userPrompt },
     ])
 
-    // 8) Logs
+    // 9) Logs
     const path =
       rpcOk && Array.isArray(hits) && hits.length > 0
-        ? 'rpc'
+        ? `rpc:${rpcName}`
         : Array.isArray(hits) && hits.length > 0
-          ? 'rest'
+          ? `rest:${restTable}`
           : 'llm_only'
 
     try {
@@ -295,8 +318,8 @@ export async function POST(req: Request) {
           profile_slug: profile ?? null,
           top_ids: (hits ?? []).slice(0, top_k).map((h) => h.id ?? null),
           response: { answer, sources, path },
-          usage: { mode, top_k, rpcOk },
-          user_id: user.id, // ✅ on log le user maintenant (optionnel mais utile)
+          usage: { mode: isDev ? 'dev' : 'prod', top_k, rpcOk, rpcName },
+          user_id: user.id,
         }),
       })
       if (!logRes.ok) {
@@ -307,13 +330,13 @@ export async function POST(req: Request) {
       console.warn('Erreur log (non bloquant):', e)
     }
 
-    // 9) Réponse HTTP
+    // 10) Réponse HTTP
     return json(
       {
         answer: answer?.trim() || 'Je n’ai pas pu générer une réponse.',
         sources,
         path,
-        usage: { top_k, rpcOk },
+        usage: { top_k, rpcOk, rpcName, mode: isDev ? 'dev' : 'prod' },
       },
       { status: 200, headers: CORS_HEADERS }
     )
