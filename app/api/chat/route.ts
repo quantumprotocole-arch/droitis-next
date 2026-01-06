@@ -174,7 +174,11 @@ function extractKeywords(q: string, max = 6): string[] {
   const uniq: string[] = [];
   for (let i = 0; i < parts.length; i++) {
     const t = parts[i].trim();
-    if (!t || t.length < 4) continue;
+    if (!t) continue;
+
+    const keepShort = t === "ccq" || t === "cpc" || t === "cp";
+    if (t.length < 4 && !keepShort) continue;
+
     if (STOPWORDS_FR.has(t)) continue;
     if (uniq.indexOf(t) !== -1) continue;
     uniq.push(t);
@@ -192,6 +196,16 @@ function detectArticleMention(q: string): { mentioned: boolean; nums: string[] }
   return { mentioned: nums.length > 0, nums };
 }
 
+function extractArticleNumFromRow(row: EnrichedRow): string | null {
+  // 1) DB value if present
+  if (row.article_num && String(row.article_num).trim()) return String(row.article_num).trim();
+
+  // 2) Fallback: parse from citation/title/text
+  const hay = `${row.citation ?? ""} ${row.title ?? ""} ${row.text ?? ""}`.toLowerCase();
+  const m = hay.match(/\b(?:art\.?|article)\s*([0-9]{1,5})\b/);
+  return m?.[1] ?? null;
+}
+
 function rrfScore(rank: number, k = 60): number {
   return 1 / (k + rank);
 }
@@ -203,7 +217,9 @@ function makeExcerpt(text: string, maxLen = 1000): string {
 }
 
 function dedupKey(r: EnrichedRow): string {
-  if (r.code_id_struct && r.article_num) return `${r.code_id_struct}::${r.article_num}`;
+  const code = (r.code_id_struct ?? "").trim();
+  const art = extractArticleNumFromRow(r);
+  if (code && art) return `${code}::${art}`;
   if (r.citation) return `CIT::${r.citation}`;
   return `ID::${r.id}`;
 }
@@ -228,7 +244,8 @@ function scoreHit(args: {
   let articleConf = 0.5;
   if (article.mentioned) {
     articleConf = 0.2;
-    if (row.article_num && article.nums.indexOf(row.article_num) !== -1) {
+    const rowArt = extractArticleNumFromRow(row);
+    if (rowArt && article.nums.indexOf(rowArt) !== -1) {
       score += 0.8;
       articleConf = 1.0;
     }
@@ -358,7 +375,6 @@ async function enrichByIds(ids: Array<string | number>): Promise<Map<number, Enr
   const map = new Map<number, EnrichedRow>();
   if (!ids.length) return map;
 
-  // Build `id=in.(...)`
   const numericIds: number[] = [];
   for (let i = 0; i < ids.length; i++) {
     const n = Number(ids[i]);
@@ -388,7 +404,6 @@ async function keywordSearchFallback(passJur: Jurisdiction, keywords: string[], 
 
   if (passJur !== "UNKNOWN") base += `&jurisdiction_norm=eq.${encodeURIComponent(passJur)}`;
 
-  // PostgREST OR: or=(field.ilike.%kw%,field2.ilike.%kw%,...)
   const ors: string[] = [];
   for (let i = 0; i < keywords.length; i++) {
     const kw = keywords[i].replace(/[%_]/g, "");
@@ -400,12 +415,78 @@ async function keywordSearchFallback(passJur: Jurisdiction, keywords: string[], 
 
   const res = await supaGet(base);
   if (!res.ok) {
-    // keyword fallback is "best effort": if it fails, return []
     const t = await res.text().catch(() => "");
     console.warn("keywordSearchFallback failed:", res.status, t);
     return [];
   }
   return ((await res.json()) ?? []) as EnrichedRow[];
+}
+
+/**
+ * Lookup déterministe quand l’utilisateur mentionne "art. XXXX".
+ * On s’appuie sur citation (qui est fiable dans ton ingestion), car article_num peut être NULL
+ * si extract_article_num(...) ne matche pas le format. :contentReference[oaicite:2]{index=2}
+ */
+async function directArticleLookupQC(args: {
+  articleNums: string[];
+  mustLookLikeCCQ: boolean;
+  limit: number;
+}): Promise<EnrichedRow[]> {
+  const { articleNums, mustLookLikeCCQ, limit } = args;
+
+  const out: EnrichedRow[] = [];
+  const seen = new Set<number>();
+
+  for (let i = 0; i < articleNums.length; i++) {
+    const n = articleNums[i];
+
+    // 1) strict: QC + citation contains number + (optional) ccq marker
+    let url =
+      `/rest/v1/legal_vectors_enriched` +
+      `?select=id,code_id,citation,title,text,jurisdiction_norm,code_id_struct,article_num,url_struct` +
+      `&jurisdiction_norm=eq.QC` +
+      `&citation=ilike.${encodeURIComponent(`*${n}*`)}`;
+
+    if (mustLookLikeCCQ) {
+      url += `&citation=ilike.${encodeURIComponent(`*c.c.q*`)}`;
+    }
+
+    url += `&limit=${limit}`;
+
+    const res = await supaGet(url);
+    if (res.ok) {
+      const rows = ((await res.json()) ?? []) as EnrichedRow[];
+      for (let j = 0; j < rows.length; j++) {
+        if (!seen.has(rows[j].id)) {
+          seen.add(rows[j].id);
+          out.push(rows[j]);
+        }
+      }
+    }
+
+    // 2) fallback: QC + citation contains number (no ccq requirement)
+    if (mustLookLikeCCQ && out.length === 0) {
+      const url2 =
+        `/rest/v1/legal_vectors_enriched` +
+        `?select=id,code_id,citation,title,text,jurisdiction_norm,code_id_struct,article_num,url_struct` +
+        `&jurisdiction_norm=eq.QC` +
+        `&citation=ilike.${encodeURIComponent(`*${n}*`)}` +
+        `&limit=${limit}`;
+
+      const res2 = await supaGet(url2);
+      if (res2.ok) {
+        const rows2 = ((await res2.json()) ?? []) as EnrichedRow[];
+        for (let j = 0; j < rows2.length; j++) {
+          if (!seen.has(rows2[j].id)) {
+            seen.add(rows2[j].id);
+            out.push(rows2[j]);
+          }
+        }
+      }
+    }
+  }
+
+  return out;
 }
 
 async function hybridPass(args: {
@@ -682,13 +763,27 @@ export async function POST(req: Request) {
     const keywords = extractKeywords(message, 6);
     const article = detectArticleMention(message);
 
+    // --- PINNING DÉTERMINISTE (articles) ---
+    // Si la question mentionne "art. XXXX", on force la récupération via citation.
+    let pinnedRows: EnrichedRow[] = [];
+    if (article.mentioned) {
+      const mustLookLikeCCQ = /c\.c\.q|ccq|code civil/i.test(message);
+      pinnedRows = await directArticleLookupQC({
+        articleNums: article.nums,
+        mustLookLikeCCQ,
+        limit: 5,
+      });
+    }
+
     const passOrder: Jurisdiction[] = ["QC", "CA-FED", "OTHER"];
     const vectorN = 36;
     const keywordN = 24;
 
+    // Start with pinned rows to ensure they survive dedup/top_k
     const allRows: EnrichedRow[] = [];
-    const debugPasses: any[] = [];
+    for (let i = 0; i < pinnedRows.length; i++) allRows.push(pinnedRows[i]);
 
+    const debugPasses: any[] = [];
     for (let p = 0; p < passOrder.length; p++) {
       const passJur = passOrder[p];
       const pass = await hybridPass({
@@ -725,12 +820,25 @@ export async function POST(req: Request) {
       if (seen.has(k)) continue;
       seen.add(k);
       finalRows.push(allRows[i]);
-      if (finalRows.length >= top_k) break;
     }
 
+    // If article mentioned, prioritize exact article matches first (stable-ish)
+    if (article.mentioned) {
+      finalRows.sort((a, b) => {
+        const aArt = extractArticleNumFromRow(a);
+        const bArt = extractArticleNumFromRow(b);
+        const aMatch = aArt && article.nums.indexOf(aArt) !== -1 ? 1 : 0;
+        const bMatch = bArt && article.nums.indexOf(bArt) !== -1 ? 1 : 0;
+        return bMatch - aMatch;
+      });
+    }
+
+    // Cut to top_k after ordering
+    const limitedRows = finalRows.slice(0, top_k);
+
     const sources: Source[] = [];
-    for (let i = 0; i < finalRows.length; i++) {
-      const r = finalRows[i];
+    for (let i = 0; i < limitedRows.length; i++) {
+      const r = limitedRows[i];
       sources.push({
         id: r.id,
         citation: r.citation,
@@ -750,9 +858,9 @@ export async function POST(req: Request) {
 
     // article_confidence (max on first 6)
     let article_confidence = 0;
-    const scanN = Math.min(finalRows.length, 6);
+    const scanN = Math.min(limitedRows.length, 6);
     for (let i = 0; i < scanN; i++) {
-      const sc = scoreHit({ row: finalRows[i], expected: jurisdiction_expected, keywords, article, similarity: null });
+      const sc = scoreHit({ row: limitedRows[i], expected: jurisdiction_expected, keywords, article, similarity: null });
       if (sc.article_conf > article_confidence) article_confidence = sc.article_conf;
     }
 
@@ -767,7 +875,7 @@ export async function POST(req: Request) {
       await supaPost("/rest/v1/logs", {
         question: message,
         profile_slug: profile ?? null,
-        top_ids: finalRows.map((r) => r.id),
+        top_ids: limitedRows.map((r) => r.id),
         response: {
           answer: refusal,
           sources,
@@ -855,7 +963,7 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
       await supaPost("/rest/v1/logs", {
         question: message,
         profile_slug: profile ?? null,
-        top_ids: finalRows.map((r) => r.id),
+        top_ids: limitedRows.map((r) => r.id),
         response: {
           answer: refusal,
           sources,
@@ -887,7 +995,7 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
       await supaPost("/rest/v1/logs", {
         question: message,
         profile_slug: profile ?? null,
-        top_ids: finalRows.map((r) => r.id),
+        top_ids: limitedRows.map((r) => r.id),
         response: {
           answer: refusal,
           sources,
@@ -914,7 +1022,7 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
     await supaPost("/rest/v1/logs", {
       question: message,
       profile_slug: profile ?? null,
-      top_ids: finalRows.map((r) => r.id),
+      top_ids: limitedRows.map((r) => r.id),
       response: {
         answer,
         sources,
