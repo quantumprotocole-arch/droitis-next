@@ -159,11 +159,57 @@ function buildClarificationQuestion(q: string): string {
 }
 
 const STOPWORDS_FR = new Set([
-  "alors","aucun","avec","dans","donc","elle","elles","entre","être","mais","même","pour","sans","sont","tout","toute","tous",
-  "le","la","les","un","une","des","de","du","au","aux","et","ou","sur","par","que","qui","quoi","dont","est","etre","a","à","en","se","sa","son","ses","ce","cet","cette","ces"
+  "alors",
+  "aucun",
+  "avec",
+  "dans",
+  "donc",
+  "elle",
+  "elles",
+  "entre",
+  "être",
+  "mais",
+  "même",
+  "pour",
+  "sans",
+  "sont",
+  "tout",
+  "toute",
+  "tous",
+  "le",
+  "la",
+  "les",
+  "un",
+  "une",
+  "des",
+  "de",
+  "du",
+  "au",
+  "aux",
+  "et",
+  "ou",
+  "sur",
+  "par",
+  "que",
+  "qui",
+  "quoi",
+  "dont",
+  "est",
+  "etre",
+  "a",
+  "à",
+  "en",
+  "se",
+  "sa",
+  "son",
+  "ses",
+  "ce",
+  "cet",
+  "cette",
+  "ces",
 ]);
 
-function extractKeywords(q: string, max = 6): string[] {
+function extractKeywords(q: string, max = 8): string[] {
   const cleaned = q
     .toLowerCase()
     .replace(/[^a-z0-9à-öø-ÿ\s.-]/gi, " ")
@@ -174,17 +220,67 @@ function extractKeywords(q: string, max = 6): string[] {
   const uniq: string[] = [];
   for (let i = 0; i < parts.length; i++) {
     const t = parts[i].trim();
-    if (!t) continue;
-
-    const keepShort = t === "ccq" || t === "cpc" || t === "cp";
-    if (t.length < 4 && !keepShort) continue;
-
+    if (!t || t.length < 4) continue;
     if (STOPWORDS_FR.has(t)) continue;
     if (uniq.indexOf(t) !== -1) continue;
     uniq.push(t);
     if (uniq.length >= max) break;
   }
   return uniq;
+}
+
+function expandQuery(
+  message: string,
+  baseKeywords: string[],
+  expected: Jurisdiction
+): { keywords: string[]; pinnedArticleNums: string[] } {
+  const s = message.toLowerCase();
+  const kw = [...baseKeywords];
+
+  const add = (t: string) => {
+    const x = t.toLowerCase().trim();
+    if (!x || x.length < 3) return;
+    if (STOPWORDS_FR.has(x)) return;
+    if (kw.indexOf(x) === -1) kw.push(x);
+  };
+
+  // Expansions “conceptuelles” (petit, safe, non-hallucinant)
+  const pinned: string[] = [];
+
+  const has = (needle: string) => s.includes(needle);
+
+  // Responsabilité civile (QC)
+  if (has("responsabilité civile") || (has("responsabilite") && has("civile")) || has("faute") || has("préjudice") || has("prejudice")) {
+    add("faute");
+    add("préjudice");
+    add("prejudice");
+    add("dommage");
+    add("causal");
+    add("causalité");
+    add("causalite");
+    add("réparation");
+    add("reparation");
+    add("obligation");
+    add("diligence");
+
+    // Pinning minimal (uniquement si la row existe dans le corpus -> sinon aucun effet)
+    if (expected === "QC" || expected === "UNKNOWN") {
+      pinned.push("1457", "1458", "1459");
+    }
+  }
+
+  // Contrat / responsabilité contractuelle (QC)
+  if (has("responsabilité contractuelle") || has("responsabilite contractuelle") || has("contrat") || has("contractuel")) {
+    add("contrat");
+    add("obligation");
+    add("inexécution");
+    add("inexecution");
+    add("dommages");
+  }
+
+  // On limite l’explosion
+  const final = kw.slice(0, 12);
+  return { keywords: final, pinnedArticleNums: pinned };
 }
 
 function detectArticleMention(q: string): { mentioned: boolean; nums: string[] } {
@@ -194,16 +290,6 @@ function detectArticleMention(q: string): { mentioned: boolean; nums: string[] }
   let m: RegExpExecArray | null;
   while ((m = re.exec(s)) !== null) nums.push(m[1]);
   return { mentioned: nums.length > 0, nums };
-}
-
-function extractArticleNumFromRow(row: EnrichedRow): string | null {
-  // 1) DB value if present
-  if (row.article_num && String(row.article_num).trim()) return String(row.article_num).trim();
-
-  // 2) Fallback: parse from citation/title/text
-  const hay = `${row.citation ?? ""} ${row.title ?? ""} ${row.text ?? ""}`.toLowerCase();
-  const m = hay.match(/\b(?:art\.?|article)\s*([0-9]{1,5})\b/);
-  return m?.[1] ?? null;
 }
 
 function rrfScore(rank: number, k = 60): number {
@@ -217,9 +303,7 @@ function makeExcerpt(text: string, maxLen = 1000): string {
 }
 
 function dedupKey(r: EnrichedRow): string {
-  const code = (r.code_id_struct ?? "").trim();
-  const art = extractArticleNumFromRow(r);
-  if (code && art) return `${code}::${art}`;
+  if (r.code_id_struct && r.article_num) return `${r.code_id_struct}::${r.article_num}`;
   if (r.citation) return `CIT::${r.citation}`;
   return `ID::${r.id}`;
 }
@@ -241,11 +325,15 @@ function scoreHit(args: {
   else if (jurMatch) score += 1.0;
   else score -= 0.8;
 
+  // Boost “article” citations a bit, penalize big headings
+  const cit = (row.citation ?? "").toLowerCase();
+  if (/^art\./i.test(row.citation ?? "")) score += 0.15;
+  if (cit.startsWith("livre ") || cit.startsWith("book ")) score -= 0.25;
+
   let articleConf = 0.5;
   if (article.mentioned) {
     articleConf = 0.2;
-    const rowArt = extractArticleNumFromRow(row);
-    if (rowArt && article.nums.indexOf(rowArt) !== -1) {
+    if (row.article_num && article.nums.indexOf(row.article_num) !== -1) {
       score += 0.8;
       articleConf = 1.0;
     }
@@ -398,19 +486,29 @@ async function enrichByIds(ids: Array<string | number>): Promise<Map<number, Enr
   return map;
 }
 
+/**
+ * ✅ Keyword fallback (PostgREST):
+ * or=(citation.ilike.*kw*,title.ilike.*kw*,text.ilike.*kw*)
+ */
 async function keywordSearchFallback(passJur: Jurisdiction, keywords: string[], limit: number): Promise<EnrichedRow[]> {
   let base =
-    `/rest/v1/legal_vectors_enriched?select=id,code_id,citation,title,text,jurisdiction_norm,code_id_struct,article_num,url_struct&limit=${limit}`;
+    `/rest/v1/legal_vectors_enriched` +
+    `?select=id,code_id,citation,title,text,jurisdiction_norm,code_id_struct,article_num,url_struct` +
+    `&limit=${limit}`;
 
   if (passJur !== "UNKNOWN") base += `&jurisdiction_norm=eq.${encodeURIComponent(passJur)}`;
 
   const ors: string[] = [];
   for (let i = 0; i < keywords.length; i++) {
-    const kw = keywords[i].replace(/[%_]/g, "");
-    ors.push(`citation.ilike.%${kw}%`);
-    ors.push(`title.ilike.%${kw}%`);
-    ors.push(`text.ilike.%${kw}%`);
+    // keep it URL-safe-ish (PostgREST will decode after encodeURIComponent below)
+    const raw = keywords[i].trim().replace(/[%_]/g, "");
+    if (!raw) continue;
+    const pat = `*${raw}*`;
+    ors.push(`citation.ilike.${pat}`);
+    ors.push(`title.ilike.${pat}`);
+    ors.push(`text.ilike.${pat}`);
   }
+
   if (ors.length) base += `&or=(${encodeURIComponent(ors.join(","))})`;
 
   const res = await supaGet(base);
@@ -422,71 +520,31 @@ async function keywordSearchFallback(passJur: Jurisdiction, keywords: string[], 
   return ((await res.json()) ?? []) as EnrichedRow[];
 }
 
-/**
- * Lookup déterministe quand l’utilisateur mentionne "art. XXXX".
- * On s’appuie sur citation (qui est fiable dans ton ingestion), car article_num peut être NULL
- * si extract_article_num(...) ne matche pas le format. :contentReference[oaicite:2]{index=2}
- */
-async function directArticleLookupQC(args: {
-  articleNums: string[];
-  mustLookLikeCCQ: boolean;
-  limit: number;
-}): Promise<EnrichedRow[]> {
-  const { articleNums, mustLookLikeCCQ, limit } = args;
+async function pinByArticleNums(passJur: Jurisdiction, nums: string[], limit: number): Promise<EnrichedRow[]> {
+  if (!nums.length) return [];
+  let base =
+    `/rest/v1/legal_vectors_enriched` +
+    `?select=id,code_id,citation,title,text,jurisdiction_norm,code_id_struct,article_num,url_struct` +
+    `&limit=${limit}`;
 
-  const out: EnrichedRow[] = [];
-  const seen = new Set<number>();
+  if (passJur !== "UNKNOWN") base += `&jurisdiction_norm=eq.${encodeURIComponent(passJur)}`;
 
-  for (let i = 0; i < articleNums.length; i++) {
-    const n = articleNums[i];
-
-    // 1) strict: QC + citation contains number + (optional) ccq marker
-    let url =
-      `/rest/v1/legal_vectors_enriched` +
-      `?select=id,code_id,citation,title,text,jurisdiction_norm,code_id_struct,article_num,url_struct` +
-      `&jurisdiction_norm=eq.QC` +
-      `&citation=ilike.${encodeURIComponent(`*${n}*`)}`;
-
-    if (mustLookLikeCCQ) {
-      url += `&citation=ilike.${encodeURIComponent(`*c.c.q*`)}`;
-    }
-
-    url += `&limit=${limit}`;
-
-    const res = await supaGet(url);
-    if (res.ok) {
-      const rows = ((await res.json()) ?? []) as EnrichedRow[];
-      for (let j = 0; j < rows.length; j++) {
-        if (!seen.has(rows[j].id)) {
-          seen.add(rows[j].id);
-          out.push(rows[j]);
-        }
-      }
-    }
-
-    // 2) fallback: QC + citation contains number (no ccq requirement)
-    if (mustLookLikeCCQ && out.length === 0) {
-      const url2 =
-        `/rest/v1/legal_vectors_enriched` +
-        `?select=id,code_id,citation,title,text,jurisdiction_norm,code_id_struct,article_num,url_struct` +
-        `&jurisdiction_norm=eq.QC` +
-        `&citation=ilike.${encodeURIComponent(`*${n}*`)}` +
-        `&limit=${limit}`;
-
-      const res2 = await supaGet(url2);
-      if (res2.ok) {
-        const rows2 = ((await res2.json()) ?? []) as EnrichedRow[];
-        for (let j = 0; j < rows2.length; j++) {
-          if (!seen.has(rows2[j].id)) {
-            seen.add(rows2[j].id);
-            out.push(rows2[j]);
-          }
-        }
-      }
-    }
+  const ors: string[] = [];
+  for (let i = 0; i < nums.length; i++) {
+    const n = nums[i].trim();
+    if (!n) continue;
+    // Search in citation/title/text to be tolerant
+    const pat = `*${n}*`;
+    ors.push(`citation.ilike.${pat}`);
+    ors.push(`title.ilike.${pat}`);
+    ors.push(`text.ilike.${pat}`);
   }
+  if (!ors.length) return [];
+  base += `&or=(${encodeURIComponent(ors.join(","))})`;
 
-  return out;
+  const res = await supaGet(base);
+  if (!res.ok) return [];
+  return ((await res.json()) ?? []) as EnrichedRow[];
 }
 
 async function hybridPass(args: {
@@ -667,7 +725,6 @@ export async function POST(req: Request) {
   const startedAt = Date.now();
 
   try {
-    // Env validation
     if (!OPENAI_API_KEY) return json({ error: "OPENAI_API_KEY manquant" }, 500);
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
       return json({ error: "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant" }, 500);
@@ -675,7 +732,6 @@ export async function POST(req: Request) {
 
     const body = (await req.json().catch(() => ({}))) as ChatRequest;
 
-    // ✅ Compat parsing: Phase 3 uses `message`
     let message =
       (typeof body.message === "string" && body.message.trim()) ||
       (typeof body.question === "string" && body.question.trim()) ||
@@ -691,12 +747,12 @@ export async function POST(req: Request) {
       }
     }
 
-    // If still empty -> professional 400 with expected fields
     if (!message) {
       return json(
         {
           error: "Missing question",
-          details: "Le body JSON doit contenir soit { message: string } (Phase 3), soit { question: string }, soit { messages: [{role:'user', content:string}, ...] }.",
+          details:
+            "Le body JSON doit contenir soit { message: string } (Phase 3), soit { question: string }, soit { messages: [{role:'user', content:string}, ...] }.",
         },
         { status: 400, headers: CORS_HEADERS }
       );
@@ -713,7 +769,6 @@ export async function POST(req: Request) {
     if (jurisdiction_expected === "UNKNOWN" && trap) {
       const clarify = buildClarificationQuestion(message);
 
-      // Log QA
       await supaPost("/rest/v1/logs", {
         question: message,
         profile_slug: profile ?? null,
@@ -734,7 +789,6 @@ export async function POST(req: Request) {
         user_id: user.id,
       }).catch((e) => console.warn("log insert failed:", e));
 
-      // Return with Phase 3 schema
       return json(
         {
           answer: clarify,
@@ -751,39 +805,33 @@ export async function POST(req: Request) {
       );
     }
 
-    // Embedding
     const queryEmbedding = await createEmbedding(message);
     if (!queryEmbedding) return json({ error: "Échec embedding" }, 500);
 
-    // RPC name (Phase 3 behavior)
     const isDev = mode === "dev";
     const rpcName = isDev ? "search_legal_vectors_dev" : "search_legal_vectors_v2";
 
-    // Phase4B: passes QC → CA-FED → OTHER
-    const keywords = extractKeywords(message, 6);
+    // ✅ Keywords + expansion
+    const baseKeywords = extractKeywords(message, 8);
+    const { keywords, pinnedArticleNums } = expandQuery(message, baseKeywords, jurisdiction_expected);
     const article = detectArticleMention(message);
 
-    // --- PINNING DÉTERMINISTE (articles) ---
-    // Si la question mentionne "art. XXXX", on force la récupération via citation.
-    let pinnedRows: EnrichedRow[] = [];
-    if (article.mentioned) {
-      const mustLookLikeCCQ = /c\.c\.q|ccq|code civil/i.test(message);
-      pinnedRows = await directArticleLookupQC({
-        articleNums: article.nums,
-        mustLookLikeCCQ,
-        limit: 5,
-      });
-    }
+    // ✅ Pin “piliers” only if they exist (does not hallucinate)
+    const pinnedRows =
+      jurisdiction_expected === "QC" || jurisdiction_expected === "UNKNOWN"
+        ? await pinByArticleNums("QC", pinnedArticleNums, 8)
+        : [];
 
     const passOrder: Jurisdiction[] = ["QC", "CA-FED", "OTHER"];
-    const vectorN = 36;
-    const keywordN = 24;
+    const vectorN = 80; // a bit higher -> more recall
+    const keywordN = 40;
 
-    // Start with pinned rows to ensure they survive dedup/top_k
     const allRows: EnrichedRow[] = [];
+    const debugPasses: any[] = [];
+
+    // Seed with pinned (dedup later)
     for (let i = 0; i < pinnedRows.length; i++) allRows.push(pinnedRows[i]);
 
-    const debugPasses: any[] = [];
     for (let p = 0; p < passOrder.length; p++) {
       const passJur = passOrder[p];
       const pass = await hybridPass({
@@ -803,12 +851,13 @@ export async function POST(req: Request) {
       // stop early if QC pass good enough
       if (passJur === "QC") {
         let good = 0;
-        const checkN = Math.min(pass.rows.length, 8);
+        const checkN = Math.min(pass.rows.length, 10);
         for (let i = 0; i < checkN; i++) {
           const s = scoreHit({ row: pass.rows[i], expected: jurisdiction_expected, keywords, article, similarity: null });
           if (s.hit_quality_score >= 1.2) good++;
         }
-        if (good >= 4) break;
+        // plus pinned helps: if we already have some, we can stop earlier
+        if (good >= 3 || pinnedRows.length >= 2) break;
       }
     }
 
@@ -820,25 +869,12 @@ export async function POST(req: Request) {
       if (seen.has(k)) continue;
       seen.add(k);
       finalRows.push(allRows[i]);
+      if (finalRows.length >= top_k) break;
     }
-
-    // If article mentioned, prioritize exact article matches first (stable-ish)
-    if (article.mentioned) {
-      finalRows.sort((a, b) => {
-        const aArt = extractArticleNumFromRow(a);
-        const bArt = extractArticleNumFromRow(b);
-        const aMatch = aArt && article.nums.indexOf(aArt) !== -1 ? 1 : 0;
-        const bMatch = bArt && article.nums.indexOf(bArt) !== -1 ? 1 : 0;
-        return bMatch - aMatch;
-      });
-    }
-
-    // Cut to top_k after ordering
-    const limitedRows = finalRows.slice(0, top_k);
 
     const sources: Source[] = [];
-    for (let i = 0; i < limitedRows.length; i++) {
-      const r = limitedRows[i];
+    for (let i = 0; i < finalRows.length; i++) {
+      const r = finalRows[i];
       sources.push({
         id: r.id,
         citation: r.citation,
@@ -851,20 +887,18 @@ export async function POST(req: Request) {
 
     const had_qc_source = sources.some((s) => normalizeJurisdiction(s.jur ?? "") === "QC");
     const rag_quality = computeRagQuality({
-      expected: jurisdiction_expected === "UNKNOWN" ? "QC" : jurisdiction_expected, // conservative
+      expected: jurisdiction_expected === "UNKNOWN" ? "QC" : jurisdiction_expected,
       sources,
       had_qc_source,
     });
 
-    // article_confidence (max on first 6)
     let article_confidence = 0;
-    const scanN = Math.min(limitedRows.length, 6);
+    const scanN = Math.min(finalRows.length, 6);
     for (let i = 0; i < scanN; i++) {
-      const sc = scoreHit({ row: limitedRows[i], expected: jurisdiction_expected, keywords, article, similarity: null });
+      const sc = scoreHit({ row: finalRows[i], expected: jurisdiction_expected, keywords, article, similarity: null });
       if (sc.article_conf > article_confidence) article_confidence = sc.article_conf;
     }
 
-    // rag_quality=0 -> refuse
     if (rag_quality === 0) {
       const refusal =
         "Information non disponible dans le corpus actuel. Pour répondre avec certitude, il faut ingérer :\n" +
@@ -875,7 +909,7 @@ export async function POST(req: Request) {
       await supaPost("/rest/v1/logs", {
         question: message,
         profile_slug: profile ?? null,
-        top_ids: limitedRows.map((r) => r.id),
+        top_ids: finalRows.map((r) => r.id),
         response: {
           answer: refusal,
           sources,
@@ -921,7 +955,10 @@ export async function POST(req: Request) {
 
     const context =
       sources
-        .map((s) => `SOURCE id=${s.id}\nCitation: ${s.citation}\nJuridiction: ${s.jur}\nURL: ${s.url ?? ""}\nExtrait:\n${s.snippet ?? ""}`)
+        .map(
+          (s) =>
+            `SOURCE id=${s.id}\nCitation: ${s.citation}\nJuridiction: ${s.jur}\nURL: ${s.url ?? ""}\nExtrait:\n${s.snippet ?? ""}`
+        )
         .join("\n---\n") || "(aucun extrait)";
 
     const userPayload = [
@@ -953,7 +990,6 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
 
     const parsed = safeJsonParse<ModelJson>(completion.content);
 
-    // Post-check serveur
     if (!parsed) {
       const refusal =
         "Je ne peux pas répondre de façon fiable (sortie invalide). " +
@@ -963,7 +999,7 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
       await supaPost("/rest/v1/logs", {
         question: message,
         profile_slug: profile ?? null,
-        top_ids: limitedRows.map((r) => r.id),
+        top_ids: finalRows.map((r) => r.id),
         response: {
           answer: refusal,
           sources,
@@ -980,7 +1016,10 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
         user_id: user.id,
       }).catch((e) => console.warn("log insert failed:", e));
 
-      return json({ answer: refusal, sources: [], usage: { type: "refuse", rag_quality } }, { status: 200, headers: CORS_HEADERS });
+      return json(
+        { answer: refusal, sources: [], usage: { type: "refuse", rag_quality } },
+        { status: 200, headers: CORS_HEADERS }
+      );
     }
 
     if (warning && parsed.type === "answer") parsed.warning = warning;
@@ -995,7 +1034,7 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
       await supaPost("/rest/v1/logs", {
         question: message,
         profile_slug: profile ?? null,
-        top_ids: limitedRows.map((r) => r.id),
+        top_ids: finalRows.map((r) => r.id),
         response: {
           answer: refusal,
           sources,
@@ -1013,16 +1052,18 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
         user_id: user.id,
       }).catch((e) => console.warn("log insert failed:", e));
 
-      return json({ answer: refusal, sources: [], usage: { type: "refuse", rag_quality } }, { status: 200, headers: CORS_HEADERS });
+      return json(
+        { answer: refusal, sources: [], usage: { type: "refuse", rag_quality } },
+        { status: 200, headers: CORS_HEADERS }
+      );
     }
 
     const answer = formatAnswerFromModel(parsed, allowlist, sources, warning);
 
-    // Log
     await supaPost("/rest/v1/logs", {
       question: message,
       profile_slug: profile ?? null,
-      top_ids: limitedRows.map((r) => r.id),
+      top_ids: finalRows.map((r) => r.id),
       response: {
         answer,
         sources,
@@ -1039,7 +1080,6 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
       user_id: user.id,
     }).catch((e) => console.warn("log insert failed:", e));
 
-    // ✅ Phase 3 response contract
     return json(
       {
         answer,
