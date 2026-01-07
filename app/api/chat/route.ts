@@ -616,7 +616,7 @@ async function hybridSearchRPC(args: {
   match_count: number;
   bucket?: string | null;
 }): Promise<HybridHit[]> {
-  const rpcName = "search_legal_vectors_hybrid_v1";
+  const rpcName = "search_legal_vectors_hybrid_v2";
 
   // Variants to survive parameter naming differences (solid production hardening)
   const variants = [
