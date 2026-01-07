@@ -24,6 +24,17 @@ type EnrichedRow = {
   url_struct: string | null;
 };
 
+// RPC hybrid result can include extra scoring fields.
+type HybridHit = EnrichedRow & {
+  similarity?: number | null; // 0..1
+  distance?: number | null; // optional legacy
+  fts_rank?: number | null; // optional legacy
+  score?: number | null; // optional legacy
+  rrf_score?: number | null; // ✅ returned by your RPC
+  from_fts?: boolean | null; // ✅ returned by your RPC
+  bucket?: string | null; // optional legacy
+};
+
 type Source = {
   id: string | number;
   citation: string | null;
@@ -41,15 +52,6 @@ type ChatRequest = {
 
   question?: string;
   messages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
-};
-
-// Hybrid RPC result can include extra scoring fields.
-type HybridHit = EnrichedRow & {
-  similarity?: number | null; // 0..1
-  distance?: number | null; // 0..2 (cosine dist) depending impl
-  fts_rank?: number | null; // 0..?
-  score?: number | null; // fused score (RRF) if returned by RPC
-  bucket?: string | null;
 };
 
 // ------------------------------
@@ -318,8 +320,6 @@ function jurisdictionGate(message: string): GateDecision {
   if (qcStrong) return { type: "continue", selected: "QC", reason: "explicit_qc_law" };
 
   const detected = detectJurisdictionExpected(message);
-
-  // Si UNKNOWN et pas de signaux, on laisse continuer (on clarifiera seulement si RAG=0)
   return { type: "continue", selected: detected, reason: "heuristic_detected" };
 }
 
@@ -349,54 +349,8 @@ function detectDomain(message: string): Domain {
 // Keyword extraction + expansion
 // ------------------------------
 const STOPWORDS_FR = new Set([
-  "alors",
-  "aucun",
-  "avec",
-  "dans",
-  "donc",
-  "elle",
-  "elles",
-  "entre",
-  "être",
-  "mais",
-  "même",
-  "pour",
-  "sans",
-  "sont",
-  "tout",
-  "toute",
-  "tous",
-  "le",
-  "la",
-  "les",
-  "un",
-  "une",
-  "des",
-  "de",
-  "du",
-  "au",
-  "aux",
-  "et",
-  "ou",
-  "sur",
-  "par",
-  "que",
-  "qui",
-  "quoi",
-  "dont",
-  "est",
-  "etre",
-  "a",
-  "à",
-  "en",
-  "se",
-  "sa",
-  "son",
-  "ses",
-  "ce",
-  "cet",
-  "cette",
-  "ces",
+  "alors","aucun","avec","dans","donc","elle","elles","entre","être","mais","même","pour","sans","sont","tout","toute","tous",
+  "le","la","les","un","une","des","de","du","au","aux","et","ou","sur","par","que","qui","quoi","dont","est","etre","a","à","en","se","sa","son","ses","ce","cet","cette","ces",
 ]);
 
 function extractKeywords(q: string, max = 10): string[] {
@@ -628,7 +582,6 @@ function isCivilCodeQcSource(r: EnrichedRow): boolean {
 
 function isHealthLawQcSource(r: EnrichedRow): boolean {
   const hay = `${r.citation ?? ""} ${r.title ?? ""} ${r.text ?? ""}`.toLowerCase();
-  // minimal (à élargir si ton corpus a des tags)
   return containsAny(hay, [
     "lssss",
     "loi sur les services de santé",
@@ -661,7 +614,6 @@ function computeCoverage(args: {
     return { coverage_ok: false, missing_coverage: ["Aucune source pertinente dans le corpus."], ingest_needed: ["Ajouter les textes (loi + juridiction) pertinents à la question."] };
   }
 
-  // Default: ok
   let ok = true;
 
   if (domain === "Penal") {
@@ -669,7 +621,6 @@ function computeCoverage(args: {
     const hasCrCode = finalRows.some(isCriminalCodeSource);
     const hasEv = hasEvidenceExclusionSignals(message);
 
-    // règle MV: (Criminal Code) ET (Charte OU signaux preuve/exclusion)
     ok = hasCrCode && (hasCharter || hasEv);
 
     if (!hasCrCode) {
@@ -683,8 +634,6 @@ function computeCoverage(args: {
   }
 
   if (domain === "Travail") {
-    // On n’impose pas CA-FED systématiquement, mais si on est en CA-FED (ou piège fédéral),
-    // on veut au moins 1 source CLC pour des recours de congédiement.
     const work = hasWorkSignals(message);
     const hasCLC = finalRows.some(isCanadaLabourCodeSource);
     if (work && jurisdiction_selected === "CA-FED") {
@@ -699,7 +648,6 @@ function computeCoverage(args: {
   if (domain === "Sante") {
     const hasCCQ = finalRows.some(isCivilCodeQcSource);
     const hasHealth = finalRows.some(isHealthLawQcSource);
-    // MV: CCQ OU loi santé/accès
     ok = hasCCQ || hasHealth;
     if (!hasCCQ && !hasHealth) {
       missing.push("Base légale santé QC (CCQ ou loi santé/accès pertinente) non trouvée dans les extraits.");
@@ -707,7 +655,6 @@ function computeCoverage(args: {
     }
   }
 
-  // Civil/Fiscal/Admin: pas de coverage hard en MV, mais on peut alimenter missing si article explicitement demandé
   const art = detectArticleMention(message);
   if (art.mentioned) {
     const wanted = art.nums;
@@ -715,11 +662,10 @@ function computeCoverage(args: {
     if (!hasAny) {
       missing.push(`Article(s) mentionné(s) (${wanted.join(", ")}) non trouvé(s) dans les extraits.`);
       ingest.push(`Ajouter au corpus les articles exacts demandés (${wanted.join(", ")}) (loi + juridiction) ou un extrait officiel contenant ces articles.`);
-      ok = domain === "Penal" || domain === "Travail" || domain === "Sante" ? ok : false; // pour non-risqué: on marque coverage faible si article explicitement demandé
+      ok = domain === "Penal" || domain === "Travail" || domain === "Sante" ? ok : false;
     }
   }
 
-  // Si UNKNOWN et corpus mélange: on ne force pas "ok=false" — on préfère réponse prudente.
   if (jurisdiction_selected === "UNKNOWN") {
     ok = finalRows.length >= 1;
   }
@@ -733,11 +679,9 @@ function computeRelevanceOk(args: {
   const { candidates } = args;
   if (!candidates.length) return false;
 
-  // Signal 1: composite fort sur au moins 1 hit
   const best = candidates[0];
   if (best.composite >= 1.2) return true;
 
-  // Signal 2: overlap >= 2 sur au moins 1 hit
   for (let i = 0; i < Math.min(candidates.length, 10); i++) {
     if (candidates[i].overlap >= 2) return true;
   }
@@ -752,12 +696,11 @@ function computeRagQuality(args: {
   coverage_ok: boolean;
   domain: Domain;
 }): 0 | 1 | 2 | 3 {
-  const { jurisdiction_expected, jurisdiction_selected, sources, relevance_ok, coverage_ok, domain } = args;
+  const { jurisdiction_expected, sources, relevance_ok, coverage_ok } = args;
 
   const n = sources.length;
   if (n === 0) return 0;
 
-  // Base jurisdiction sanity
   let match = 0;
   if (jurisdiction_expected !== "UNKNOWN") {
     for (let i = 0; i < sources.length; i++) {
@@ -773,7 +716,6 @@ function computeRagQuality(args: {
   if (n >= 2 && (jurisdiction_expected === "UNKNOWN" || match >= 1)) base = 2;
   if (jurisdiction_expected !== "UNKNOWN" && match === 0) base = 1;
 
-  // rag=3 seulement si relevance_ok ET coverage_ok (domain à risque inclus)
   if (base === 2 && relevance_ok && coverage_ok) return 3;
   if (base === 2) return 2;
   return 1;
@@ -851,52 +793,59 @@ async function supaPost(path: string, body: any) {
 // ------------------------------
 // Hybrid RPC search (FTS + vector) — RPC ONLY (Phase 4B final)
 // ------------------------------
-async function callRpcWithVariants<T>(rpcName: string, variants: any[]): Promise<T[]> {
-  let lastErr: any = null;
 
-  for (let i = 0; i < variants.length; i++) {
-    const body = variants[i];
-    try {
-      const rpcRes = await supaPost(`/rest/v1/rpc/${rpcName}`, body);
-      if (!rpcRes.ok) {
-        const t = await rpcRes.text().catch(() => "");
-        lastErr = new Error(`RPC ${rpcName} failed: ${rpcRes.status} ${t}`);
-        continue;
-      }
-      return ((await rpcRes.json()) ?? []) as T[];
-    } catch (e) {
-      lastErr = e;
-    }
+// ✅ mapping attendu par la DB (jurisdiction_norm semble être "QC" ou "CA")
+function toDbJurisdictionNorm(j: Jurisdiction): string | null {
+  if (j === "QC") return "QC";
+  if (j === "CA-FED") return "CA";
+  // OTHER/UNKNOWN: pas de filtre
+  return null;
+}
+
+// ✅ si ton “bucket” suit le même pattern que jurisdiction_norm, on fait pareil.
+// Sinon, laisse null (filtre désactivé).
+function toDbBucket(j: Jurisdiction): string | null {
+  if (j === "QC") return "QC";
+  if (j === "CA-FED") return "CA";
+  return null;
+}
+
+async function callRpc<T>(rpcName: string, body: any): Promise<T[]> {
+  const rpcRes = await supaPost(`/rest/v1/rpc/${rpcName}`, body);
+  if (!rpcRes.ok) {
+    const t = await rpcRes.text().catch(() => "");
+    throw new Error(`RPC ${rpcName} failed: ${rpcRes.status} ${t}`);
   }
-
-  throw lastErr ?? new Error(`RPC ${rpcName} failed (no variant worked)`);
+  return ((await rpcRes.json()) ?? []) as T[];
 }
 
 async function hybridSearchRPC(args: {
   query_text: string;
   query_embedding: number[];
   match_count: number;
-  bucket?: string | null; // optional if your RPC supports it
+  filter_jurisdiction_norm: string | null;
+  filter_bucket: string | null;
 }): Promise<HybridHit[]> {
-  const rpcName = "search_legal_vectors_hybrid_v2";
+  // ✅ v2 d’abord, puis fallback v1 (même signature)
+  const payload = {
+    query_embedding: args.query_embedding,
+    query_text: args.query_text,
+    match_count: args.match_count,
+    filter_jurisdiction_norm: args.filter_jurisdiction_norm,
+    filter_bucket: args.filter_bucket,
+  };
 
-  // Variants: robust aux différences de signature (prod hardening)
-  const variants = [
-    { query_text: args.query_text, query_embedding: args.query_embedding, match_count: args.match_count, bucket: args.bucket ?? null },
-    { query_text: args.query_text, query_embedding: args.query_embedding, match_count: args.match_count },
-    { query: args.query_text, query_embedding: args.query_embedding, match_count: args.match_count },
-    { q: args.query_text, query_embedding: args.query_embedding, match_count: args.match_count },
-    { query_text: args.query_text, query_embedding: args.query_embedding, k: args.match_count },
-    { query: args.query_text, query_embedding: args.query_embedding, k: args.match_count },
-  ];
-
-  return await callRpcWithVariants<HybridHit>(rpcName, variants);
+  try {
+    return await callRpc<HybridHit>("search_legal_vectors_hybrid_v2", payload);
+  } catch (e) {
+    // fallback v1
+    return await callRpc<HybridHit>("search_legal_vectors_hybrid_v1", payload);
+  }
 }
 
 // ------------------------------
 // Prompt + output checks (Phase 4B — “verrouillé” + réponse graduée)
 // ------------------------------
-// SYSTEM PROMPT — version verrouillée (aligné policy) :contentReference[oaicite:2]{index=2}
 const SYSTEM_PROMPT = `
 Tu es Droitis, tuteur IA spécialisé en droit québécois (QC).
 Tu réponds en ILAC/IRAC : Problème → Règle → Application → Conclusion.
@@ -922,17 +871,13 @@ type ModelJson = {
   ilac?: { probleme: string; regle: string; application: string; conclusion: string };
 
   clarification_question?: string;
-
   refusal_reason?: string;
 
-  // Phase 4B response graduée
   partial?: boolean;
   missing_coverage?: string[];
   ingest_needed?: string[];
 
-  // Allowlist
   source_ids_used?: Array<string | number>;
-
   warning?: string;
 };
 
@@ -948,9 +893,6 @@ function enforceAllowedSourceIds(parsed: ModelJson, allowed: string[]): { ok: bo
   return { ok: bad.length === 0, bad, kept };
 }
 
-// Post-check “anti-hallucination” (soft-redact)
-// Objectif: ne jamais laisser passer des citations/arrêts/articles hors allowlist.
-// On redige plutôt que refuser systématiquement (réduit les refus).
 function buildAllowedCitationText(sources: Source[]): string {
   const uniq = new Set<string>();
   for (let i = 0; i < sources.length; i++) {
@@ -964,17 +906,14 @@ function redactUnsupportedRefs(text: string, allowedCitationsLower: string): { t
   let out = text ?? "";
   const redactions: string[] = [];
 
-  // Articles: "art. 8", "article 1457"
   const artRe = /\b(?:art\.?|article)\s*([0-9]{1,5})\b/gi;
   out = out.replace(artRe, (m) => {
     const ml = m.toLowerCase();
-    if (allowedCitationsLower.includes(ml)) return m; // exact mention appears in allowlist string
-    // Si l’allowlist contient "1457" sans "article", on reste prudent: on redige quand même
+    if (allowedCitationsLower.includes(ml)) return m;
     redactions.push(m);
     return "article [non supporté par le corpus]";
   });
 
-  // Citations style "2007 CSC 34", "2018 SCC 10", "2021 QCCA 123"
   const caseRe = /\b(19\d{2}|20\d{2})\s*(CSC|SCC|QCCA|QCCS|QCCQ|BCCA|ONCA|FCA|CAF)\s*([0-9]{1,6})\b/gi;
   out = out.replace(caseRe, (m) => {
     const ml = m.toLowerCase();
@@ -1020,7 +959,7 @@ function formatAnswerFromModel(parsed: ModelJson, sources: Source[], serverWarni
     .filter(Boolean)
     .join("\n");
 
-  const warn = (serverWarning || parsed.warning) ? `\n\n⚠️ ${serverWarning || parsed.warning}\n` : "";
+  const warn = serverWarning || parsed.warning ? `\n\n⚠️ ${serverWarning || parsed.warning}\n` : "";
   const partial = parsed.partial ? `\n\n⚠️ Réponse partielle : certaines sous-questions ne sont pas couvertes par les extraits.\n` : "";
 
   const missing = (parsed.missing_coverage ?? []).length
@@ -1095,7 +1034,6 @@ export async function POST(req: Request) {
     }
 
     const profile = body.profile ?? null;
-    // UX/Perf: top_k visible (5–8 recommandé)
     const top_k = clamp(body.top_k ?? 7, 5, 8);
     const mode = (body.mode ?? "prod").toLowerCase();
 
@@ -1165,12 +1103,17 @@ export async function POST(req: Request) {
     let hybridError: string | null = null;
 
     try {
-      // bucket hint optionnel — si RPC l’ignore, variants assurent la compat.
+      // ✅ Paramètres EXACTS attendus par la signature RPC
+      // ✅ Mapping CA-FED => "CA" pour filter_jurisdiction_norm
+      const filterNorm = jurisdiction_expected === "UNKNOWN" ? null : toDbJurisdictionNorm(jurisdiction_expected);
+      const filterBucket = jurisdiction_expected === "UNKNOWN" ? null : toDbBucket(jurisdiction_expected);
+
       hybridHits = await hybridSearchRPC({
         query_text: message,
         query_embedding: queryEmbedding,
         match_count: poolSize,
-        bucket: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
+        filter_jurisdiction_norm: filterNorm,
+        filter_bucket: filterBucket,
       });
     } catch (e: any) {
       hybridError = e?.message ?? String(e);
@@ -1181,7 +1124,7 @@ export async function POST(req: Request) {
     // ------------------------------
     // Passes QC → CA-FED → OTHER (app-side) + dedup + ranking
     // ------------------------------
-    const PASS_ORDER: Jurisdiction[] = ["QC", "CA-FED", "OTHER"]; // non négociable Phase 4B :contentReference[oaicite:3]{index=3}
+    const PASS_ORDER: Jurisdiction[] = ["QC", "CA-FED", "OTHER"];
     const debugPasses: any[] = [];
 
     type Cand = { row: EnrichedRow; composite: number; overlap: number; passJur: Jurisdiction };
@@ -1199,12 +1142,13 @@ export async function POST(req: Request) {
 
       const sc = scoreHit({ row: h, expected: jurisdiction_expected, keywords, article, similarity: sim });
 
-      // score RPC (RRF fusion) si disponible, sinon neutre
-      const rpcScore = typeof h.score === "number" ? h.score : 0;
-      const fts = typeof h.fts_rank === "number" ? Math.min(1, h.fts_rank) : 0;
+      // ✅ rpc score: rrf_score (réel) > score (legacy)
+      const rpcScore = typeof h.rrf_score === "number" ? h.rrf_score : typeof h.score === "number" ? h.score : 0;
 
-      // Composite stable (calibrage conservateur)
-      const composite = rpcScore * 0.9 + sc.hit_quality_score * 0.25 + (sim ?? 0) * 0.08 + fts * 0.05;
+      // ✅ FTS bonus: from_fts (réel) > fts_rank (legacy)
+      const ftsBonus = h.from_fts === true ? 0.08 : typeof h.fts_rank === "number" ? Math.min(0.08, Math.max(0, h.fts_rank) * 0.02) : 0;
+
+      const composite = rpcScore * 0.9 + sc.hit_quality_score * 0.25 + (sim ?? 0) * 0.08 + ftsBonus;
 
       return { composite, overlap: sc.overlap };
     };
@@ -1231,7 +1175,6 @@ export async function POST(req: Request) {
 
       local.sort((a, b) => b.composite - a.composite);
 
-      // On limite par pass pour éviter exploser le prompt; on retient un pool utile.
       const take = passJur === "QC" ? 90 : passJur === "CA-FED" ? 80 : 60;
       let good = 0;
 
@@ -1253,20 +1196,14 @@ export async function POST(req: Request) {
         hybridError,
       });
 
-      // Pass B/C seulement si Pass A insuffisant
       if (passJur === "QC" && good >= minGoodQCPass) {
-        // On ne coupe pas si domaine pénal (souvent CA-FED needed)
         if (domain_detected !== "Penal") break;
       }
-
-      // Si rien trouvé en QC, on continue.
-      // Sinon, CA-FED/OTHER seront ajoutés selon nécessité.
     }
 
     // ------------------------------
     // Sélection top_k (coverage-aware) depuis candidates
     // ------------------------------
-    // candidates est déjà par pass; on re-trie globalement par composite
     const global = [...candidates].sort((a, b) => b.composite - a.composite);
 
     const finalRows: EnrichedRow[] = [];
@@ -1285,7 +1222,6 @@ export async function POST(req: Request) {
       return false;
     };
 
-    // 1) On essaie d’attraper d’abord les “piliers” nécessaires (si présents)
     for (let i = 0; i < global.length && finalRows.length < top_k; i++) {
       const r = global[i].row;
       const k = dedupKey(r);
@@ -1300,7 +1236,6 @@ export async function POST(req: Request) {
       if (need.clc && isCanadaLabourCodeSource(r)) need.clc = false;
     }
 
-    // 2) On complète avec les meilleurs hits
     for (let i = 0; i < global.length && finalRows.length < top_k; i++) {
       const r = global[i].row;
       const k = dedupKey(r);
@@ -1320,16 +1255,13 @@ export async function POST(req: Request) {
 
     const jurisdiction_selected = selectJurisdictionFromSources(sources, jurisdiction_expected);
 
-    // Relevance signal: basé sur les meilleurs candidats (global)
     const relevance_ok = computeRelevanceOk({
       candidates: global.slice(0, 12).map((x) => ({ row: x.row, composite: x.composite, overlap: x.overlap })),
     });
 
-    // Coverage signal: basé sur finalRows (puisque le modèle ne peut citer que ça)
     const cov = computeCoverage({ domain: domain_detected, message, finalRows, jurisdiction_selected });
     const coverage_ok = cov.coverage_ok;
 
-    // rag_quality final (suffisance pour répondre)
     const rag_quality = computeRagQuality({
       jurisdiction_expected,
       jurisdiction_selected,
@@ -1339,7 +1271,6 @@ export async function POST(req: Request) {
       domain: domain_detected,
     });
 
-    // article confidence (telemetry)
     let article_confidence = 0;
     const scanN = Math.min(finalRows.length, 6);
     for (let i = 0; i < scanN; i++) {
@@ -1350,16 +1281,16 @@ export async function POST(req: Request) {
     const had_qc_source = sources.some((s) => normalizeJurisdiction(s.jur ?? "") === "QC");
 
     // ------------------------------
-    // No-source / low-relevance decision (refus rare, mais déterministe)
+    // No-source / low-relevance decision
     // ------------------------------
     if (sources.length === 0 || !relevance_ok) {
-      // Si juridiction incertaine, on clarifie (max 1–3 questions)
       if (jurisdiction_expected === "UNKNOWN") {
         const clarify =
           "Avant de répondre, je n’ai pas trouvé d’extraits suffisamment pertinents dans le corpus.\n" +
           "1) Quelle juridiction veux-tu appliquer (QC / CA-FED / autre) ?\n" +
           "2) Quel domaine (pénal, travail, santé, civil, fiscal, administratif) ?\n" +
           "3) Peux-tu donner 2–3 mots-clés (ou un article précis) ?";
+
         await supaPost("/rest/v1/logs", {
           question: message,
           profile_slug: profile ?? null,
@@ -1448,14 +1379,11 @@ export async function POST(req: Request) {
 
     const context =
       sources
-        .map(
-          (s) =>
-            `SOURCE id=${s.id}\nCitation: ${s.citation}\nJuridiction: ${s.jur}\nURL: ${s.url ?? ""}\nExtrait:\n${s.snippet ?? ""}`
-        )
+        .map((s) => `SOURCE id=${s.id}\nCitation: ${s.citation}\nJuridiction: ${s.jur}\nURL: ${s.url ?? ""}\nExtrait:\n${s.snippet ?? ""}`)
         .join("\n---\n") || "(aucun extrait)";
 
     // ------------------------------
-    // Model payload (includes missing_coverage + ingest_needed)
+    // Model payload
     // ------------------------------
     const userPayload = [
       `Question: ${message}`,
@@ -1488,11 +1416,9 @@ export async function POST(req: Request) {
   "domain": "Civil" | "Travail" | "Sante" | "Penal" | "Fiscal" | "Admin" | "Autre" | "Inconnu",
   "ilac": { "probleme": "...", "regle": "...", "application": "...", "conclusion": "..." },
   "source_ids_used": ["..."],
-
   "partial": false,
   "missing_coverage": ["..."],
   "ingest_needed": ["..."],
-
   "warning": "...",
   "refusal_reason": "...",
   "clarification_question": "..."
@@ -1506,7 +1432,7 @@ RÈGLES:
       .join("\n\n");
 
     // ------------------------------
-    // Call model (1 shot + retry-on-refusal when sources are ok)
+    // Call model
     // ------------------------------
     const runModel = async (extraNudge?: string) => {
       const msgs: Array<{ role: "system" | "user" | "assistant"; content: string }> = [{ role: "system", content: SYSTEM_PROMPT }];
@@ -1518,7 +1444,6 @@ RÈGLES:
     let completion = await runModel();
     let parsed = safeJsonParse<ModelJson>(completion.content);
 
-    // Retry once if model over-refuses despite relevance_ok
     if (parsed && parsed.type === "refuse" && sources.length > 0 && relevance_ok) {
       completion = await runModel(
         "IMPORTANT: Tu ne dois pas refuser si une réponse prudente et partielle est possible avec les extraits. Réponds en 'answer' + partial=true et utilise uniquement l’allowlist."
@@ -1560,21 +1485,18 @@ RÈGLES:
     }
 
     // ------------------------------
-    // Server-side safety normalization (graduée)
+    // Server-side safety normalization
     // ------------------------------
     parsed.domain = parsed.domain ?? domain_detected;
     parsed.jurisdiction = parsed.jurisdiction ?? jurisdiction_selected;
 
-    // Ensure missing_coverage/ingest defaults if model omitted but we computed them
     if (!parsed.missing_coverage || parsed.missing_coverage.length === 0) parsed.missing_coverage = cov.missing_coverage ?? [];
     if (!parsed.ingest_needed || parsed.ingest_needed.length === 0) parsed.ingest_needed = cov.ingest_needed ?? [];
 
-    // If coverage is weak, prefer partial answer instead of refusal (unless no sources)
     if (parsed.type === "refuse" && sources.length > 0) {
-      // Convert to partial answer (safe), unless refusal is due to no-sources
       parsed.type = "answer";
       parsed.partial = true;
-      parsed.warning = parsed.warning ?? "Réponse partielle (le modèle avait initialement refusé; conversion serveur pour éviter un refus total inutile).";
+      parsed.warning = parsed.warning ?? "Réponse partielle (conversion serveur pour éviter un refus total inutile).";
       parsed.ilac = parsed.ilac ?? {
         probleme: "Selon les extraits disponibles, la question soulève un enjeu juridique, mais certaines bases précises manquent dans le corpus.",
         regle: "Je ne peux énoncer que les règles explicitement supportées par les extraits. Pour le reste, l’information n’est pas disponible dans le corpus actuel.",
@@ -1583,10 +1505,8 @@ RÈGLES:
       };
     }
 
-    // Allowlist check
     const allow = enforceAllowedSourceIds(parsed, allowed_source_ids);
 
-    // If allowlist violations, drop the bad IDs instead of refusing (unless none left)
     let bad_source_ids: string[] = [];
     if (!allow.ok) {
       bad_source_ids = allow.bad;
@@ -1598,20 +1518,16 @@ RÈGLES:
         parsed.partial = false;
       } else {
         parsed.partial = true;
-        parsed.warning =
-          (parsed.warning ? parsed.warning + " " : "") +
-          "Certaines sources proposées par le modèle étaient hors allowlist et ont été retirées (réponse partielle).";
+        parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "Certaines sources hors allowlist ont été retirées (réponse partielle).";
       }
     }
 
-    // If answer but no source_ids_used: auto-fill 1–2 sources (réduit refus inutiles)
     if (parsed.type === "answer" && (!parsed.source_ids_used || parsed.source_ids_used.length === 0)) {
       parsed.source_ids_used = sources.slice(0, Math.min(2, sources.length)).map((s) => s.id);
       parsed.partial = true;
       parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "Aucune source sélectionnée par le modèle; sélection serveur minimale appliquée (réponse partielle).";
     }
 
-    // Soft-redact unsupported refs in ILAC fields (anti-hallucination)
     let redactions: string[] = [];
     if (parsed.type === "answer" && parsed.ilac) {
       const p1 = redactUnsupportedRefs(parsed.ilac.probleme ?? "", allowedCitationsLower);
@@ -1623,6 +1539,7 @@ RÈGLES:
       parsed.ilac.application = p3.text;
       parsed.ilac.conclusion = p4.text;
       redactions = [...p1.redactions, ...p2.redactions, ...p3.redactions, ...p4.redactions];
+
       if (redactions.length) {
         parsed.partial = true;
         parsed.missing_coverage = Array.from(new Set([...(parsed.missing_coverage ?? []), ...redactions.map((x) => `Référence non supportée par l’allowlist: ${x}`)]));
@@ -1631,13 +1548,11 @@ RÈGLES:
       }
     }
 
-    // If the server warning says context weak, keep it
     if (serverWarning && parsed.type === "answer") {
       parsed.warning = parsed.warning ? `${serverWarning} ${parsed.warning}` : serverWarning;
       if (rag_quality <= 2) parsed.partial = parsed.partial ?? true;
     }
 
-    // Ensure refused_reason always filled if refuse
     if (parsed.type === "refuse" && !parsed.refusal_reason) {
       parsed.refusal_reason = "Information non disponible dans le corpus actuel (refus déterministe).";
     }
@@ -1645,7 +1560,7 @@ RÈGLES:
     const answer = formatAnswerFromModel(parsed, sources, serverWarning);
 
     // ------------------------------
-    // Logging QA (Phase 4B)
+    // Logging QA
     // ------------------------------
     await supaPost("/rest/v1/logs", {
       question: message,
