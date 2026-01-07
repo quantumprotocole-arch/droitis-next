@@ -48,6 +48,7 @@ type ChatRequest = {
   profile?: string | null;
   top_k?: number | null;
   mode?: string | null; // "dev" force dev
+
   // Phase 4 compatibility
   question?: string;
   messages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
@@ -98,7 +99,7 @@ function normalizeJurisdiction(j: string | null | undefined): Jurisdiction | "OT
 }
 
 // ------------------------------
-// Jurisdiction detection (FIXED)
+// Jurisdiction detection (Phase 4B: robust, non-work-centric)
 // ------------------------------
 // ✅ “Québec” seul = signal faible (lieu), pas un signal juridique QC.
 // On ne déclenche QC “fort” que si l’utilisateur mentionne clairement le régime QC.
@@ -124,8 +125,7 @@ function hasQcLegalSignals(q: string): boolean {
 
 function hasQcWeakLocationSignals(q: string): boolean {
   const s = q.toLowerCase();
-  // Lieu / contexte, mais pas un ancrage de régime juridique (sinon ça casse banque->fédéral)
-  const weak = ["québec", "quebec", "montréal", "montreal", "saguenay", "gatineau", "laval"];
+  const weak = ["québec", "quebec", "montréal", "montreal", "saguenay", "gatineau", "laval", "trois-rivières", "trois-rivieres"];
   for (let i = 0; i < weak.length; i++) if (s.includes(weak[i])) return true;
   return false;
 }
@@ -146,7 +146,65 @@ function hasFedLegalSignals(q: string): boolean {
   return false;
 }
 
-// Secteurs “très typiquement fédéraux” (socle Central)
+// Signaux pénal/procédure pénale (CA-FED probable)
+function hasPenalSignals(q: string): boolean {
+  const s = q.toLowerCase();
+  const penal = [
+    "police",
+    "alcootest",
+    "souffler",
+    "dépistage",
+    "depistage",
+    "fouille",
+    "perquisition",
+    "mandat",
+    "saisie",
+    "preuve illégale",
+    "preuve illegale",
+    "déclaration",
+    "declaration",
+    "aveu",
+    "arrestation",
+    "détention",
+    "detention",
+    "accusation",
+    "couronne",
+    "procureur",
+    "charte canadienne",
+    "code criminel",
+    "criminal code",
+  ];
+  for (let i = 0; i < penal.length; i++) if (s.includes(penal[i])) return true;
+  return false;
+}
+
+// Signaux santé/consentement (QC probable si contexte QC)
+function hasHealthSignals(q: string): boolean {
+  const s = q.toLowerCase();
+  const health = [
+    "hôpital",
+    "hopital",
+    "urgence",
+    "intuber",
+    "réanimation",
+    "reanimation",
+    "refus de soins",
+    "soins",
+    "consentement",
+    "inapte",
+    "aptitude",
+    "capacité",
+    "capacite",
+    "tuteur",
+    "curateur",
+    "mandat de protection",
+    "directives",
+  ];
+  for (let i = 0; i < health.length; i++) if (s.includes(health[i])) return true;
+  return false;
+}
+
+// Secteurs “très typiquement fédéraux”
 function hasStrongFedSectorSignals(q: string): { matched: boolean; keyword?: string } {
   const s = q.toLowerCase();
   const strong = [
@@ -171,20 +229,26 @@ function hasStrongFedSectorSignals(q: string): { matched: boolean; keyword?: str
 }
 
 function detectJurisdictionExpected(q: string): Jurisdiction {
-  // 1) Signaux juridiques explicites > tout
+  // 1) Signaux juridiques explicites
   if (hasQcLegalSignals(q)) return "QC";
   if (hasFedLegalSignals(q)) return "CA-FED";
 
-  // 2) Secteurs fédéraux explicites (banque…) => CA-FED (même “au Québec”)
+  // 2) Signaux pénal → CA-FED probable (ex: Code criminel / Charte)
+  if (hasPenalSignals(q)) return "CA-FED";
+
+  // 3) Santé + QC-location → QC probable
+  if (hasHealthSignals(q) && hasQcWeakLocationSignals(q)) return "QC";
+
+  // 4) Secteur fédéral explicite → CA-FED (même “au Québec”)
   const fedSector = hasStrongFedSectorSignals(q);
   if (fedSector.matched) return "CA-FED";
 
-  // 3) Autres provinces/pays
+  // 5) Autres provinces/pays
   const s = q.toLowerCase();
   const otherSignals = ["ontario", "alberta", "colombie-britannique", "british columbia", "france", "europe", "usa", "états-unis", "etats-unis"];
   for (let i = 0; i < otherSignals.length; i++) if (s.includes(otherSignals[i])) return "OTHER";
 
-  // 4) “Québec” seul ne suffit pas à choisir (sinon conflit avec banque)
+  // 6) Lieu QC seul => UNKNOWN (on laisse le retrieval décider)
   if (hasQcWeakLocationSignals(q)) return "UNKNOWN";
 
   return "UNKNOWN";
@@ -199,12 +263,17 @@ function jurisdictionGate(message: string): GateDecision {
   const fedStrong = hasFedLegalSignals(message);
   const fedSector = hasStrongFedSectorSignals(message);
 
-  // ✅ Si secteur fédéral explicitement nommé ET pas d’ancrage juridique QC explicite -> auto CA-FED, no clarify
+  // ✅ secteur fédéral explicitement nommé ET pas d’ancrage juridique QC explicite -> auto CA-FED, no clarify
   if (fedSector.matched && !qcStrong) {
-    return { type: "continue", selected: "CA-FED", reason: "strong_federal_sector_autopick", pitfall_keyword: fedSector.keyword ?? null };
+    return {
+      type: "continue",
+      selected: "CA-FED",
+      reason: "strong_federal_sector_autopick",
+      pitfall_keyword: fedSector.keyword ?? null,
+    };
   }
 
-  // Conflit “vrai” : user invoque explicitement QC (ex: CNESST/CCQ) et mentionne un secteur fédéral
+  // Conflit “vrai” : user invoque explicitement QC ET mentionne secteur fédéral
   if (qcStrong && fedSector.matched) {
     return {
       type: "clarify",
@@ -217,23 +286,66 @@ function jurisdictionGate(message: string): GateDecision {
     };
   }
 
-  // Fed explicite
   if (fedStrong) return { type: "continue", selected: "CA-FED", reason: "explicit_fed_law" };
-
-  // QC explicite
   if (qcStrong) return { type: "continue", selected: "QC", reason: "explicit_qc_law" };
 
-  // UNKNOWN => pas de blocage automatique (on laisse le retrieval + rag_quality décider)
+  // Sinon: heuristique globale
   const detected = detectJurisdictionExpected(message);
-  return { type: "continue", selected: detected, reason: "default_detected" };
+  return { type: "continue", selected: detected, reason: "heuristic_detected" };
 }
 
 // ------------------------------
-// Keyword extraction + safe expansion
+// Keyword extraction + safe expansion (no hallucination)
 // ------------------------------
 const STOPWORDS_FR = new Set([
-  "alors","aucun","avec","dans","donc","elle","elles","entre","être","mais","même","pour","sans","sont","tout","toute","tous",
-  "le","la","les","un","une","des","de","du","au","aux","et","ou","sur","par","que","qui","quoi","dont","est","etre","a","à","en","se","sa","son","ses","ce","cet","cette","ces",
+  "alors",
+  "aucun",
+  "avec",
+  "dans",
+  "donc",
+  "elle",
+  "elles",
+  "entre",
+  "être",
+  "mais",
+  "même",
+  "pour",
+  "sans",
+  "sont",
+  "tout",
+  "toute",
+  "tous",
+  "le",
+  "la",
+  "les",
+  "un",
+  "une",
+  "des",
+  "de",
+  "du",
+  "au",
+  "aux",
+  "et",
+  "ou",
+  "sur",
+  "par",
+  "que",
+  "qui",
+  "quoi",
+  "dont",
+  "est",
+  "etre",
+  "a",
+  "à",
+  "en",
+  "se",
+  "sa",
+  "son",
+  "ses",
+  "ce",
+  "cet",
+  "cette",
+  "ces",
 ]);
 
 function extractKeywords(q: string, max = 10): string[] {
@@ -321,7 +433,7 @@ function expandQuery(message: string, baseKeywords: string[], expected: Jurisdic
     add("reparation");
   }
 
-  // Travail / congédiement (fédéral ou QC)
+  // Travail / congédiement
   if (has("congédi") || has("congedi") || has("licenci") || has("renvoi") || has("emploi") || has("travail") || has("probation")) {
     add("congédiement");
     add("licenciement");
@@ -332,6 +444,28 @@ function expandQuery(message: string, baseKeywords: string[], expected: Jurisdic
     add("préavis");
     add("preavis");
     add("recours");
+  }
+
+  // Pénal / preuve
+  if (hasPenalSignals(message)) {
+    add("fouille");
+    add("perquisition");
+    add("saisie");
+    add("déclaration");
+    add("declaration");
+    add("preuve");
+    add("police");
+    add("charte");
+  }
+
+  // Santé / consentement
+  if (hasHealthSignals(message)) {
+    add("consentement");
+    add("soins");
+    add("urgence");
+    add("inapte");
+    add("capacité");
+    add("capacite");
   }
 
   return { keywords: kw.slice(0, 14), pinnedArticleNums };
@@ -366,6 +500,7 @@ function scoreHit(args: {
   const { row, expected, keywords, article, similarity } = args;
 
   let score = 0;
+
   const jur = normalizeJurisdiction(row.jurisdiction_norm);
   const jurMatch = expected === "UNKNOWN" ? true : jur === expected;
 
@@ -373,11 +508,13 @@ function scoreHit(args: {
   else if (jurMatch) score += 1.0;
   else score -= 0.8;
 
+  // Prefer “art.” sources slightly; penalize mega headings
   const citRaw = row.citation ?? "";
   const cit = citRaw.toLowerCase();
   if (/^art\./i.test(citRaw)) score += 0.15;
   if (cit.startsWith("livre ") || cit.startsWith("book ")) score -= 0.25;
 
+  // Article mention boost only if user asked an article explicitly
   let articleConf = 0.5;
   if (article.mentioned) {
     articleConf = 0.2;
@@ -403,16 +540,57 @@ function scoreHit(args: {
   return { hit_quality_score: score, article_conf: articleConf };
 }
 
-function computeRagQuality(args: { expected: Jurisdiction; sources: Source[]; had_qc_source: boolean }): 0 | 1 | 2 | 3 {
-  const { expected, sources, had_qc_source } = args;
+function selectJurisdictionFromSources(sources: Source[], fallback: Jurisdiction): Jurisdiction {
+  const counts: Record<Jurisdiction, number> = { QC: 0, "CA-FED": 0, OTHER: 0, UNKNOWN: 0 };
+  for (let i = 0; i < sources.length; i++) {
+    const j = normalizeJurisdiction(sources[i].jur ?? "");
+    if (j === "OTHER") counts.OTHER += 1;
+    else counts[j] += 1;
+  }
+
+  const candidates: Jurisdiction[] = ["QC", "CA-FED", "OTHER"];
+  let best: Jurisdiction = "UNKNOWN";
+  let bestN = 0;
+
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    const n = counts[c];
+    if (n > bestN) {
+      bestN = n;
+      best = c;
+    }
+  }
+
+  if (bestN > 0) return best;
+  return fallback;
+}
+
+/**
+ * rag_quality (0–3) — FIXED:
+ * - no forced "QC" when expected is UNKNOWN
+ * - judged vs jurisdiction_selected (dominant evidence)
+ */
+function computeRagQuality(args: { jurisdiction_selected: Jurisdiction; sources: Source[] }): 0 | 1 | 2 | 3 {
+  const { jurisdiction_selected, sources } = args;
   const n = sources.length;
-
   if (n === 0) return 0;
-  if (expected === "QC" && !had_qc_source) return 0;
 
-  if (n >= 2 && (expected !== "QC" || had_qc_source)) return 3;
-  if (n >= 1 && (expected !== "QC" || had_qc_source)) return 2;
-  return 1;
+  if (jurisdiction_selected === "UNKNOWN") {
+    // still not “0” if we have sources; we just don’t know the proper bucket
+    return n >= 2 ? 2 : 1;
+  }
+
+  // At least 1 source in selected jurisdiction?
+  let match = 0;
+  for (let i = 0; i < sources.length; i++) {
+    const j = normalizeJurisdiction(sources[i].jur ?? "");
+    const norm: Jurisdiction = j === "OTHER" ? "OTHER" : j;
+    if (norm === jurisdiction_selected) match++;
+  }
+  if (match === 0) return 0;
+
+  if (match >= 2) return 3;
+  return 2;
 }
 
 // ------------------------------
@@ -611,7 +789,8 @@ async function hybridPassFromPreVector(args: {
   for (let i = 0; i < vectorPool.length; i++) {
     const it = vectorPool[i];
     const jur = normalizeJurisdiction(it.row.jurisdiction_norm);
-    if (passJurisdiction !== "UNKNOWN" && jur !== passJurisdiction) continue;
+    const norm: Jurisdiction = jur === "OTHER" ? "OTHER" : jur;
+    if (passJurisdiction !== "UNKNOWN" && norm !== passJurisdiction) continue;
     vList.push(it);
     if (vList.length >= vectorN) break;
   }
@@ -679,47 +858,48 @@ async function hybridPassFromPreVector(args: {
 // ------------------------------
 const SYSTEM_PROMPT = `
 SOCLE ANTI-ERREUR / ANTI-HALLUCINATION — RÈGLES NON NÉGOCIABLES
-- Aucune citation inventée : tu ne cites que des références présentes dans sources[] (allowlist fournie).
-- Si l’article/arrêt n’est pas dans sources[] → tu dis "Information non disponible dans le corpus actuel" et tu proposes quoi ingérer.
+- Aucune citation inventée : tu ne cites que des sources présentes dans sources[].
+- Tu n’as PAS le droit d’utiliser des références (articles/arrêts/liens) hors sources[].
+- Si une règle/exception/test n’est pas supporté par sources[] → tu dis "Information non disponible dans le corpus actuel" et tu proposes quoi ingérer.
 - Juridiction annoncée AVANT les règles (QC / CA-FED / OTHER / UNKNOWN).
-- Si un fait critique (qui change la loi applicable) est incertain → tu poses des questions de clarification (1–3 max).
+- Si un fait critique (qui change la loi applicable) est incertain → tu poses 1–3 questions max (type="clarify").
 - Interdiction d’improviser (doctrine, tests, liens, numéros d’articles, noms d’arrêts) hors sources[].
 
-PHASE 4B — COMPORTEMENT
-- Router (juridiction + domaine).
-- Consommer uniquement sources[].
+PHASE 4B — OBJECTIF
 - Répondre en IRAC/ILAC : Problème → Règle → Application → Conclusion.
-- rag_quality implicite:
-  - Si sources insuffisantes pour une règle clé → type="refuse" (ou "clarify" si un fait critique manque).
-  - Ne JAMAIS "compléter" la loi de mémoire.
+- Réponse partielle permise : si certaines sous-questions sont couvertes par sources[], réponds à celles-là; pour le reste, indique "Non disponible" + ingest_needed.
 
 FORMAT DE SORTIE (JSON STRICT)
-- Tu dois sortir uniquement un JSON, avec citations_used ⊆ allowlist.
+- Tu dois sortir uniquement un JSON.
+- Tu dois retourner source_ids_used (IDs) qui sont un sous-ensemble exact de allowed_source_ids.
 `.trim();
 
 type ModelJson = {
   type: "answer" | "clarify" | "refuse";
   jurisdiction: Jurisdiction;
-  domain?: "Civil" | "Travail" | "Admin" | "Penal" | "Autre" | "Inconnu";
+  domain?: "Civil" | "Travail" | "Admin" | "Penal" | "Sante" | "Fiscal" | "Autre" | "Inconnu";
   ilac?: { probleme: string; regle: string; application: string; conclusion: string };
   clarification_question?: string;
   refusal_reason?: string;
   ingest_needed?: string[];
-  citations_used?: string[];
+  source_ids_used?: Array<string | number>;
   warning?: string;
-  qa_flags?: { needs_clarification?: boolean; used_sources_count?: number };
+  partial?: boolean;
 };
 
-function enforceAllowlist(parsed: ModelJson, allowlist: string[]): { ok: boolean; bad: string[] } {
-  const used = parsed.citations_used ?? [];
+function enforceAllowedSourceIds(parsed: ModelJson, allowed: string[]): { ok: boolean; bad: string[] } {
+  const used = parsed.source_ids_used ?? [];
   const bad: string[] = [];
-  for (let i = 0; i < used.length; i++) if (allowlist.indexOf(used[i]) === -1) bad.push(used[i]);
+  for (let i = 0; i < used.length; i++) {
+    const id = String(used[i]);
+    if (allowed.indexOf(id) === -1) bad.push(id);
+  }
   return { ok: bad.length === 0, bad };
 }
 
-function formatAnswerFromModel(parsed: ModelJson, allowlist: string[], sources: Source[], warning?: string): string {
+function formatAnswerFromModel(parsed: ModelJson, sources: Source[], warning?: string): string {
   if (parsed.type === "clarify") {
-    return parsed.clarification_question ?? "Avant de répondre : peux-tu préciser les faits critiques (juridiction/statut) ?";
+    return parsed.clarification_question ?? "Avant de répondre : peux-tu préciser les éléments nécessaires (juridiction / faits critiques) ?";
   }
 
   if (parsed.type === "refuse") {
@@ -732,30 +912,34 @@ function formatAnswerFromModel(parsed: ModelJson, allowlist: string[], sources: 
   }
 
   const ilac = parsed.ilac!;
-  const used = (parsed.citations_used ?? []).filter((c) => allowlist.indexOf(c) !== -1);
+  const usedIds = (parsed.source_ids_used ?? []).map((x) => String(x));
 
-  const citedLines = used
-    .map((cit) => {
-      const s = sources.find((x) => x.citation === cit);
-      const jur = s?.jur ?? "";
-      const id = s?.id ?? "";
-      const url = s?.url ?? "";
+  const citedLines = usedIds
+    .map((id) => {
+      const s = sources.find((x) => String(x.id) === id);
+      if (!s) return null;
+      const jur = s.jur ?? "";
+      const cit = s.citation ?? "(citation indisponible)";
+      const url = s.url ?? "";
       const tail = [id ? `id:${id}` : null, url ? url : null].filter(Boolean).join(" — ");
       return `- ${cit}${jur ? ` — (${jur})` : ""}${tail ? " — " + tail : ""}`;
     })
+    .filter(Boolean)
     .join("\n");
 
   const warn = warning ? `\n\n⚠️ ${warning}\n` : "";
+  const partial = parsed.partial ? `\n\n⚠️ Réponse partielle : certaines sous-questions ne sont pas couvertes par les extraits.\n` : "";
 
   return [
     `**Juridiction applicable (selon le corpus) : ${parsed.jurisdiction}**`,
     parsed.domain ? `**Domaine : ${parsed.domain}**` : "",
     warn,
+    partial,
     `**Problème**\n${ilac.probleme}`,
     `\n**Règle**\n${ilac.regle}`,
     `\n**Application**\n${ilac.application}`,
     `\n**Conclusion**\n${ilac.conclusion}`,
-    `\n**Sources citées (allowlist uniquement)**\n${citedLines || "- (aucune)"}\n`,
+    `\n**Sources citées (IDs allowlist)**\n${citedLines || "- (aucune)"}\n`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -765,8 +949,11 @@ function formatAnswerFromModel(parsed: ModelJson, allowlist: string[], sources: 
 // POST
 // ------------------------------
 export async function POST(req: Request) {
+  // ✅ Auth gate (Phase 3)
   const supabaseAuth = createClient();
-  const { data: { user } } = await supabaseAuth.auth.getUser();
+  const {
+    data: { user },
+  } = await supabaseAuth.auth.getUser();
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
@@ -782,6 +969,7 @@ export async function POST(req: Request) {
 
     const body = (await req.json().catch(() => ({}))) as ChatRequest;
 
+    // ✅ Compat parsing: Phase 3 uses `message`
     let message =
       (typeof body.message === "string" && body.message.trim()) ||
       (typeof body.question === "string" && body.question.trim()) ||
@@ -813,7 +1001,7 @@ export async function POST(req: Request) {
     const mode = (body.mode ?? "prod").toLowerCase();
 
     // ------------------------------
-    // Phase 4B: Jurisdiction gate (fixed)
+    // Phase 4B: Jurisdiction gate
     // ------------------------------
     const gate = jurisdictionGate(message);
 
@@ -868,16 +1056,18 @@ export async function POST(req: Request) {
     const isDev = mode === "dev";
     const rpcName = isDev ? "search_legal_vectors_dev" : "search_legal_vectors_v2";
 
+    // ✅ Keywords + expansion (helps “no-article” questions)
     const baseKeywords = extractKeywords(message, 10);
     const { keywords, pinnedArticleNums } = expandQuery(message, baseKeywords, jurisdiction_expected);
     const article = detectArticleMention(message);
 
+    // ✅ Pin “piliers” (retrieval aid only)
     const pinnedRows =
       jurisdiction_expected === "QC" || jurisdiction_expected === "UNKNOWN"
         ? await pinByArticleNums("QC", pinnedArticleNums, 10)
         : [];
 
-    // Perf: vector once, enrich once
+    // ✅ Vector once (perf): get a big pool, enrich once, then do pass filtering + RRF
     const vectorPoolSize = 160;
     const vHits = await vectorSearchRPC(rpcName, queryEmbedding, vectorPoolSize);
 
@@ -885,6 +1075,7 @@ export async function POST(req: Request) {
     for (let i = 0; i < vHits.length; i++) vIds.push(vHits[i].id ?? "");
     const enriched = await enrichByIds(vIds);
 
+    // Build vectorPool (ordered as returned)
     const vectorPool: Array<{ row: EnrichedRow; similarity: number | null }> = [];
     for (let i = 0; i < vHits.length; i++) {
       const h = vHits[i];
@@ -921,7 +1112,8 @@ export async function POST(req: Request) {
 
       for (let i = 0; i < pass.rows.length; i++) allRows.push(pass.rows[i]);
 
-      if (p === 0) {
+      // Stop early only when expected is NOT UNKNOWN (otherwise we want evidence across buckets)
+      if (p === 0 && jurisdiction_expected !== "UNKNOWN") {
         let good = 0;
         const checkN = Math.min(pass.rows.length, 10);
         for (let i = 0; i < checkN; i++) {
@@ -932,6 +1124,7 @@ export async function POST(req: Request) {
       }
     }
 
+    // Final dedup & top_k
     const seen = new Set<string>();
     const finalRows: EnrichedRow[] = [];
     for (let i = 0; i < allRows.length; i++) {
@@ -955,13 +1148,15 @@ export async function POST(req: Request) {
       });
     }
 
-    const had_qc_source = sources.some((s) => normalizeJurisdiction(s.jur ?? "") === "QC");
+    // ✅ Select jurisdiction based on best evidence (dominance in sources), not “QC by default”
+    const jurisdiction_selected = selectJurisdictionFromSources(sources, jurisdiction_expected);
+
     const rag_quality = computeRagQuality({
-      expected: jurisdiction_expected === "UNKNOWN" ? "QC" : jurisdiction_expected,
+      jurisdiction_selected,
       sources,
-      had_qc_source,
     });
 
+    // article_confidence (max on first 6)
     let article_confidence = 0;
     const scanN = Math.min(finalRows.length, 6);
     for (let i = 0; i < scanN; i++) {
@@ -969,7 +1164,50 @@ export async function POST(req: Request) {
       if (sc.article_conf > article_confidence) article_confidence = sc.article_conf;
     }
 
+    // If we truly have nothing: prefer clarification when expected UNKNOWN (don’t hard-refuse too early)
     if (rag_quality === 0) {
+      if (jurisdiction_expected === "UNKNOWN") {
+        const clarify =
+          "Avant de répondre, je n’ai pas trouvé d’extraits pertinents dans le corpus.\n" +
+          "1) Quelle juridiction veux-tu appliquer (QC / CA-FED / autre) ?\n" +
+          "2) Peux-tu préciser le texte/loi visé (ou un mot-clé/section), ou le contexte exact (ex: travail, pénal, soins) ?";
+
+        await supaPost("/rest/v1/logs", {
+          question: message,
+          profile_slug: profile ?? null,
+          top_ids: finalRows.map((r) => r.id),
+          response: {
+            answer: clarify,
+            sources,
+            qa: {
+              jurisdiction_expected,
+              jurisdiction_selected,
+              rag_quality,
+              article_confidence,
+              refused_reason: "rag_quality_0_clarify_unknown",
+            },
+          },
+          usage: { mode, top_k, latency_ms: Date.now() - startedAt, debugPasses },
+          user_id: user.id,
+        }).catch((e) => console.warn("log insert failed:", e));
+
+        return json(
+          {
+            answer: clarify,
+            sources: [],
+            usage: {
+              type: "clarify",
+              jurisdiction_expected,
+              jurisdiction_selected,
+              rag_quality,
+              had_qc_source: false,
+              article_confidence,
+            },
+          },
+          { status: 200, headers: CORS_HEADERS }
+        );
+      }
+
       const refusal =
         "Information non disponible dans le corpus actuel. Pour répondre avec certitude, il faut ingérer :\n" +
         "- la loi / le règlement applicable (avec juridiction)\n" +
@@ -985,11 +1223,10 @@ export async function POST(req: Request) {
           sources,
           qa: {
             jurisdiction_expected,
-            jurisdiction_selected: "UNKNOWN",
+            jurisdiction_selected,
             rag_quality,
-            had_qc_source,
             article_confidence,
-            refused_reason: "rag_quality_0",
+            refused_reason: "rag_quality_0_refuse",
           },
         },
         usage: { mode, top_k, latency_ms: Date.now() - startedAt, debugPasses },
@@ -1003,9 +1240,10 @@ export async function POST(req: Request) {
           usage: {
             type: "refuse",
             jurisdiction_expected,
-            jurisdiction_selected: "UNKNOWN",
+            jurisdiction_selected,
             rag_quality,
-            had_qc_source,
+            had_qc_source: false,
+            article_confidence,
           },
         },
         { status: 200, headers: CORS_HEADERS }
@@ -1019,8 +1257,8 @@ export async function POST(req: Request) {
           ? "Contexte faible : réponse limitée (il manque probablement des sources clés)."
           : undefined;
 
-    const allowlist: string[] = [];
-    for (let i = 0; i < sources.length; i++) if (sources[i].citation) allowlist.push(String(sources[i].citation));
+    // ✅ Allowlist by source IDs (robust)
+    const allowed_source_ids: string[] = sources.map((s) => String(s.id));
 
     const context =
       sources
@@ -1032,26 +1270,33 @@ export async function POST(req: Request) {
 
     const userPayload = [
       `Question: ${message}`,
-      `Juridiction attendue: ${jurisdiction_expected}`,
+      `Juridiction attendue (heuristique): ${jurisdiction_expected}`,
+      `Juridiction sélectionnée (sources dominantes): ${jurisdiction_selected}`,
       `Contexte:\n${context}`,
-      `Allowed citations:\n${allowlist.map((c) => `- ${c}`).join("\n") || "(vide)"}`,
+      `allowed_source_ids:\n${allowed_source_ids.map((id) => `- ${id}`).join("\n") || "(vide)"}`,
+      "",
+      "EXIGENCES:",
+      "- Réponse en ILAC/IRAC très structurée, claire.",
+      "- Tu ne peux utiliser QUE les sources ci-dessus.",
+      "- Réponse partielle permise si une sous-question n’est pas couverte (et indique ingest_needed).",
       "",
       "INSTRUCTIONS DE SORTIE (JSON strict):",
       `Réponds en JSON uniquement:
 {
   "type": "answer" | "clarify" | "refuse",
   "jurisdiction": "QC" | "CA-FED" | "OTHER" | "UNKNOWN",
-  "domain": "Civil" | "Travail" | "Admin" | "Penal" | "Autre" | "Inconnu",
+  "domain": "Civil" | "Travail" | "Admin" | "Penal" | "Sante" | "Fiscal" | "Autre" | "Inconnu",
   "ilac": { "probleme": "...", "regle": "...", "application": "...", "conclusion": "..." },
-  "citations_used": ["..."],
+  "source_ids_used": ["..."],
+  "partial": false,
   "warning": "...",
   "ingest_needed": ["..."],
   "refusal_reason": "...",
-  "clarification_question": "...",
-  "qa_flags": { "needs_clarification": false, "used_sources_count": 0 }
+  "clarification_question": "..."
 }
-IMPORTANT: "citations_used" doit être un sous-ensemble exact de Allowed citations.
-Si insuffisant: type="refuse" et utilise la phrase "Information non disponible dans le corpus actuel..."`,
+IMPORTANT:
+- source_ids_used doit être un sous-ensemble exact de allowed_source_ids.
+- Si tu ne peux pas soutenir une règle clé avec une source: type="refuse" (ou "clarify" si un fait critique manque).`,
     ].join("\n\n");
 
     const completion = await createChatCompletion([
@@ -1061,6 +1306,7 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
 
     const parsed = safeJsonParse<ModelJson>(completion.content);
 
+    // Post-check serveur: JSON must parse
     if (!parsed) {
       const refusal =
         "Je ne peux pas répondre de façon fiable (sortie invalide). " +
@@ -1076,9 +1322,8 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
           sources,
           qa: {
             jurisdiction_expected,
-            jurisdiction_selected: "UNKNOWN",
+            jurisdiction_selected,
             rag_quality,
-            had_qc_source,
             article_confidence,
             refused_reason: "json_parse_failed",
           },
@@ -1092,19 +1337,19 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
 
     if (warning && parsed.type === "answer") parsed.warning = warning;
 
-    // Hard rule: if answer, must cite at least 1 allowed citation
-    if (parsed.type === "answer" && (!parsed.citations_used || parsed.citations_used.length === 0)) {
+    // Hard rule: if "answer", must cite at least 1 allowed source id
+    if (parsed.type === "answer" && (!parsed.source_ids_used || parsed.source_ids_used.length === 0)) {
       parsed.type = "refuse";
-      parsed.refusal_reason = "Information non disponible dans le corpus actuel. (Réponse sans citation détectée)";
+      parsed.refusal_reason = "Information non disponible dans le corpus actuel. (Réponse sans source_ids_used détectée)";
       parsed.ingest_needed = [
-        "Ajouter au corpus les textes exacts (loi + juridiction) nécessaires pour soutenir la règle et la distinction demandées.",
+        "Ajouter au corpus les textes exacts (loi + juridiction) nécessaires pour soutenir la règle et les distinctions demandées.",
       ];
     }
 
-    const allow = enforceAllowlist(parsed, allowlist);
+    const allow = enforceAllowedSourceIds(parsed, allowed_source_ids);
     if (!allow.ok) {
       const refusal =
-        "Je ne peux pas répondre de façon fiable (citations hors allowlist détectées). " +
+        "Je ne peux pas répondre de façon fiable (sources hors allowlist détectées). " +
         "Information non disponible dans le corpus actuel. Pour répondre avec certitude, il faut ingérer : " +
         "- ajouter les sources manquantes au corpus (loi/article/jurisprudence).";
 
@@ -1115,14 +1360,13 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
         response: {
           answer: refusal,
           sources,
-          bad_citations: allow.bad,
+          bad_source_ids: allow.bad,
           qa: {
             jurisdiction_expected,
             jurisdiction_selected: parsed.jurisdiction,
             rag_quality,
-            had_qc_source,
             article_confidence,
-            refused_reason: "citation_leakage",
+            refused_reason: "allowlist_violation",
           },
         },
         usage: { mode, top_k, latency_ms: Date.now() - startedAt, openai_usage: completion.usage ?? null, debugPasses },
@@ -1132,8 +1376,9 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
       return json({ answer: refusal, sources: [], usage: { type: "refuse", rag_quality } }, { status: 200, headers: CORS_HEADERS });
     }
 
-    const answer = formatAnswerFromModel(parsed, allowlist, sources, warning);
+    const answer = formatAnswerFromModel(parsed, sources, warning);
 
+    // Log QA
     await supaPost("/rest/v1/logs", {
       question: message,
       profile_slug: profile ?? null,
@@ -1143,9 +1388,8 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
         sources,
         qa: {
           jurisdiction_expected,
-          jurisdiction_selected: parsed.jurisdiction,
+          jurisdiction_selected,
           rag_quality,
-          had_qc_source,
           article_confidence,
           refused_reason: parsed.type === "refuse" ? parsed.refusal_reason ?? null : null,
         },
@@ -1154,6 +1398,7 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
       user_id: user.id,
     }).catch((e) => console.warn("log insert failed:", e));
 
+    // ✅ Phase 3 response contract
     return json(
       {
         answer,
@@ -1161,9 +1406,9 @@ Si insuffisant: type="refuse" et utilise la phrase "Information non disponible d
         usage: {
           type: parsed.type,
           jurisdiction_expected,
-          jurisdiction_selected: parsed.jurisdiction,
+          jurisdiction_selected,
           rag_quality,
-          had_qc_source,
+          had_qc_source: sources.some((s) => normalizeJurisdiction(s.jur ?? "") === "QC"),
           article_confidence,
         },
       },
