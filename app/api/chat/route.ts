@@ -10,17 +10,6 @@ export const dynamic = "force-dynamic";
 // ------------------------------
 type Jurisdiction = "QC" | "CA-FED" | "OTHER" | "UNKNOWN";
 
-type VectorHit = {
-  id?: string | number;
-  code_id?: string | null;
-  jurisdiction?: string | null;
-  citation?: string | null;
-  title?: string | null;
-  text?: string | null;
-  similarity?: number | null; // recommended
-  distance?: number | null; // legacy
-};
-
 type EnrichedRow = {
   id: number;
   code_id: string | null;
@@ -43,15 +32,22 @@ type Source = {
 };
 
 type ChatRequest = {
-  // Phase 3
   message?: string;
   profile?: string | null;
   top_k?: number | null;
-  mode?: string | null; // "dev" force dev
+  mode?: string | null;
 
-  // Phase 4 compatibility
   question?: string;
   messages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+};
+
+// Hybrid RPC result can include extra scoring fields.
+type HybridHit = EnrichedRow & {
+  similarity?: number | null;
+  distance?: number | null;
+  fts_rank?: number | null;
+  score?: number | null;
+  bucket?: string | null;
 };
 
 // ------------------------------
@@ -62,21 +58,22 @@ const { OPENAI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
 // ------------------------------
 // Helpers
 // ------------------------------
-function json(data: any, init?: number | ResponseInit) {
-  return new Response(JSON.stringify(data, null, 2), {
-    status: typeof init === "number" ? init : init?.status ?? 200,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      ...(typeof init !== "number" ? init?.headers : undefined),
-    },
-  });
-}
-
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "POST, OPTIONS",
   "access-control-allow-headers": "Content-Type, Authorization",
 };
+
+function json(data: any, init?: number | ResponseInit) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status: typeof init === "number" ? init : init?.status ?? 200,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      ...CORS_HEADERS,
+      ...(typeof init !== "number" ? init?.headers : undefined),
+    },
+  });
+}
 
 export async function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -99,10 +96,8 @@ function normalizeJurisdiction(j: string | null | undefined): Jurisdiction | "OT
 }
 
 // ------------------------------
-// Jurisdiction detection (Phase 4B: robust, non-work-centric)
+// Jurisdiction detection (Phase 4B)
 // ------------------------------
-// ✅ “Québec” seul = signal faible (lieu), pas un signal juridique QC.
-// On ne déclenche QC “fort” que si l’utilisateur mentionne clairement le régime QC.
 function hasQcLegalSignals(q: string): boolean {
   const s = q.toLowerCase();
   const qcStrong = [
@@ -146,7 +141,6 @@ function hasFedLegalSignals(q: string): boolean {
   return false;
 }
 
-// Signaux pénal/procédure pénale (CA-FED probable)
 function hasPenalSignals(q: string): boolean {
   const s = q.toLowerCase();
   const penal = [
@@ -178,7 +172,6 @@ function hasPenalSignals(q: string): boolean {
   return false;
 }
 
-// Signaux santé/consentement (QC probable si contexte QC)
 function hasHealthSignals(q: string): boolean {
   const s = q.toLowerCase();
   const health = [
@@ -204,7 +197,6 @@ function hasHealthSignals(q: string): boolean {
   return false;
 }
 
-// Secteurs “très typiquement fédéraux”
 function hasStrongFedSectorSignals(q: string): { matched: boolean; keyword?: string } {
   const s = q.toLowerCase();
   const strong = [
@@ -229,28 +221,17 @@ function hasStrongFedSectorSignals(q: string): { matched: boolean; keyword?: str
 }
 
 function detectJurisdictionExpected(q: string): Jurisdiction {
-  // 1) Signaux juridiques explicites
   if (hasQcLegalSignals(q)) return "QC";
   if (hasFedLegalSignals(q)) return "CA-FED";
-
-  // 2) Signaux pénal → CA-FED probable (ex: Code criminel / Charte)
   if (hasPenalSignals(q)) return "CA-FED";
-
-  // 3) Santé + QC-location → QC probable
   if (hasHealthSignals(q) && hasQcWeakLocationSignals(q)) return "QC";
-
-  // 4) Secteur fédéral explicite → CA-FED (même “au Québec”)
   const fedSector = hasStrongFedSectorSignals(q);
   if (fedSector.matched) return "CA-FED";
 
-  // 5) Autres provinces/pays
   const s = q.toLowerCase();
   const otherSignals = ["ontario", "alberta", "colombie-britannique", "british columbia", "france", "europe", "usa", "états-unis", "etats-unis"];
   for (let i = 0; i < otherSignals.length; i++) if (s.includes(otherSignals[i])) return "OTHER";
-
-  // 6) Lieu QC seul => UNKNOWN (on laisse le retrieval décider)
   if (hasQcWeakLocationSignals(q)) return "UNKNOWN";
-
   return "UNKNOWN";
 }
 
@@ -263,7 +244,6 @@ function jurisdictionGate(message: string): GateDecision {
   const fedStrong = hasFedLegalSignals(message);
   const fedSector = hasStrongFedSectorSignals(message);
 
-  // ✅ secteur fédéral explicitement nommé ET pas d’ancrage juridique QC explicite -> auto CA-FED, no clarify
   if (fedSector.matched && !qcStrong) {
     return {
       type: "continue",
@@ -273,7 +253,6 @@ function jurisdictionGate(message: string): GateDecision {
     };
   }
 
-  // Conflit “vrai” : user invoque explicitement QC ET mentionne secteur fédéral
   if (qcStrong && fedSector.matched) {
     return {
       type: "clarify",
@@ -289,63 +268,16 @@ function jurisdictionGate(message: string): GateDecision {
   if (fedStrong) return { type: "continue", selected: "CA-FED", reason: "explicit_fed_law" };
   if (qcStrong) return { type: "continue", selected: "QC", reason: "explicit_qc_law" };
 
-  // Sinon: heuristique globale
   const detected = detectJurisdictionExpected(message);
   return { type: "continue", selected: detected, reason: "heuristic_detected" };
 }
 
 // ------------------------------
-// Keyword extraction + safe expansion (no hallucination)
+// Keyword extraction + expansion
 // ------------------------------
 const STOPWORDS_FR = new Set([
-  "alors",
-  "aucun",
-  "avec",
-  "dans",
-  "donc",
-  "elle",
-  "elles",
-  "entre",
-  "être",
-  "mais",
-  "même",
-  "pour",
-  "sans",
-  "sont",
-  "tout",
-  "toute",
-  "tous",
-  "le",
-  "la",
-  "les",
-  "un",
-  "une",
-  "des",
-  "de",
-  "du",
-  "au",
-  "aux",
-  "et",
-  "ou",
-  "sur",
-  "par",
-  "que",
-  "qui",
-  "quoi",
-  "dont",
-  "est",
-  "etre",
-  "a",
-  "à",
-  "en",
-  "se",
-  "sa",
-  "son",
-  "ses",
-  "ce",
-  "cet",
-  "cette",
-  "ces",
+  "alors","aucun","avec","dans","donc","elle","elles","entre","être","mais","même","pour","sans","sont","tout","toute","tous",
+  "le","la","les","un","une","des","de","du","au","aux","et","ou","sur","par","que","qui","quoi","dont","est","etre","a","à","en","se","sa","son","ses","ce","cet","cette","ces",
 ]);
 
 function extractKeywords(q: string, max = 10): string[] {
@@ -377,11 +309,6 @@ function detectArticleMention(q: string): { mentioned: boolean; nums: string[] }
   return { mentioned: nums.length > 0, nums };
 }
 
-/**
- * Expansion "safe":
- * - ajoute seulement des mots-concepts (pas de règles)
- * - pin d’articles seulement pour aider le retrieval (si pas en base => aucun effet)
- */
 function expandQuery(message: string, baseKeywords: string[], expected: Jurisdiction) {
   const s = message.toLowerCase();
   const kw = [...baseKeywords];
@@ -396,7 +323,6 @@ function expandQuery(message: string, baseKeywords: string[], expected: Jurisdic
   const pinnedArticleNums: string[] = [];
   const has = (needle: string) => s.includes(needle);
 
-  // Responsabilité civile (QC)
   if (
     has("responsabilité civile") ||
     (has("responsabilite") && has("civile")) ||
@@ -422,7 +348,6 @@ function expandQuery(message: string, baseKeywords: string[], expected: Jurisdic
     }
   }
 
-  // Contrat
   if (has("contrat") || has("contractuel") || has("inexécution") || has("inexecution") || has("obligation")) {
     add("contrat");
     add("obligation");
@@ -433,7 +358,6 @@ function expandQuery(message: string, baseKeywords: string[], expected: Jurisdic
     add("reparation");
   }
 
-  // Travail / congédiement
   if (has("congédi") || has("congedi") || has("licenci") || has("renvoi") || has("emploi") || has("travail") || has("probation")) {
     add("congédiement");
     add("licenciement");
@@ -446,7 +370,6 @@ function expandQuery(message: string, baseKeywords: string[], expected: Jurisdic
     add("recours");
   }
 
-  // Pénal / preuve
   if (hasPenalSignals(message)) {
     add("fouille");
     add("perquisition");
@@ -458,7 +381,6 @@ function expandQuery(message: string, baseKeywords: string[], expected: Jurisdic
     add("charte");
   }
 
-  // Santé / consentement
   if (hasHealthSignals(message)) {
     add("consentement");
     add("soins");
@@ -508,13 +430,11 @@ function scoreHit(args: {
   else if (jurMatch) score += 1.0;
   else score -= 0.8;
 
-  // Prefer “art.” sources slightly; penalize mega headings
   const citRaw = row.citation ?? "";
   const cit = citRaw.toLowerCase();
   if (/^art\./i.test(citRaw)) score += 0.15;
   if (cit.startsWith("livre ") || cit.startsWith("book ")) score -= 0.25;
 
-  // Article mention boost only if user asked an article explicitly
   let articleConf = 0.5;
   if (article.mentioned) {
     articleConf = 0.2;
@@ -565,22 +485,13 @@ function selectJurisdictionFromSources(sources: Source[], fallback: Jurisdiction
   return fallback;
 }
 
-/**
- * rag_quality (0–3) — FIXED:
- * - no forced "QC" when expected is UNKNOWN
- * - judged vs jurisdiction_selected (dominant evidence)
- */
 function computeRagQuality(args: { jurisdiction_selected: Jurisdiction; sources: Source[] }): 0 | 1 | 2 | 3 {
   const { jurisdiction_selected, sources } = args;
   const n = sources.length;
   if (n === 0) return 0;
 
-  if (jurisdiction_selected === "UNKNOWN") {
-    // still not “0” if we have sources; we just don’t know the proper bucket
-    return n >= 2 ? 2 : 1;
-  }
+  if (jurisdiction_selected === "UNKNOWN") return n >= 2 ? 2 : 1;
 
-  // At least 1 source in selected jurisdiction?
   let match = 0;
   for (let i = 0; i < sources.length; i++) {
     const j = normalizeJurisdiction(sources[i].jur ?? "");
@@ -588,7 +499,6 @@ function computeRagQuality(args: { jurisdiction_selected: Jurisdiction; sources:
     if (norm === jurisdiction_selected) match++;
   }
   if (match === 0) return 0;
-
   if (match >= 2) return 3;
   return 2;
 }
@@ -676,75 +586,60 @@ async function supaGet(path: string) {
   return res;
 }
 
-async function vectorSearchRPC(rpcName: string, query_embedding: number[], match_count: number): Promise<VectorHit[]> {
-  const rpcRes = await supaPost(`/rest/v1/rpc/${rpcName}`, { query_embedding, match_count });
-  if (!rpcRes.ok) {
-    const t = await rpcRes.text().catch(() => "");
-    throw new Error(`RPC ${rpcName} failed: ${rpcRes.status} ${t}`);
+// ------------------------------
+// NEW: Hybrid RPC search (FTS + vector) — robust payload variants
+// ------------------------------
+async function callRpcWithVariants<T>(rpcName: string, variants: any[]): Promise<T[]> {
+  let lastErr: any = null;
+
+  for (let i = 0; i < variants.length; i++) {
+    const body = variants[i];
+    try {
+      const rpcRes = await supaPost(`/rest/v1/rpc/${rpcName}`, body);
+      if (!rpcRes.ok) {
+        const t = await rpcRes.text().catch(() => "");
+        lastErr = new Error(`RPC ${rpcName} failed: ${rpcRes.status} ${t}`);
+        continue;
+      }
+      return ((await rpcRes.json()) ?? []) as T[];
+    } catch (e) {
+      lastErr = e;
+    }
   }
-  return ((await rpcRes.json()) ?? []) as VectorHit[];
+
+  throw lastErr ?? new Error(`RPC ${rpcName} failed (no variant worked)`);
 }
 
-async function enrichByIds(ids: Array<string | number>): Promise<Map<number, EnrichedRow>> {
-  const map = new Map<number, EnrichedRow>();
-  if (!ids.length) return map;
+async function hybridSearchRPC(args: {
+  query_text: string;
+  query_embedding: number[];
+  match_count: number;
+  bucket?: string | null;
+}): Promise<HybridHit[]> {
+  const rpcName = "search_legal_vectors_hybrid_v1";
 
-  const numericIds: number[] = [];
-  for (let i = 0; i < ids.length; i++) {
-    const n = Number(ids[i]);
-    if (!Number.isNaN(n)) numericIds.push(n);
-  }
-  if (!numericIds.length) return map;
+  // Variants to survive parameter naming differences (solid production hardening)
+  const variants = [
+    { query_text: args.query_text, query_embedding: args.query_embedding, match_count: args.match_count, bucket: args.bucket ?? null },
+    { query_text: args.query_text, query_embedding: args.query_embedding, match_count: args.match_count },
+    { query: args.query_text, query_embedding: args.query_embedding, match_count: args.match_count },
+    { q: args.query_text, query_embedding: args.query_embedding, match_count: args.match_count },
+    { query_text: args.query_text, query_embedding: args.query_embedding, k: args.match_count },
+    { query: args.query_text, query_embedding: args.query_embedding, k: args.match_count },
+  ];
 
-  const list = numericIds.join(",");
-  const url =
-    `/rest/v1/legal_vectors_enriched` +
-    `?select=id,code_id,citation,title,text,jurisdiction_norm,code_id_struct,article_num,url_struct` +
-    `&id=in.(${encodeURIComponent(list)})`;
-
-  const res = await supaGet(url);
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`enrichByIds failed: ${res.status} ${t}`);
-  }
-  const rows = ((await res.json()) ?? []) as EnrichedRow[];
-  for (let i = 0; i < rows.length; i++) map.set(rows[i].id, rows[i]);
-  return map;
+  return await callRpcWithVariants<HybridHit>(rpcName, variants);
 }
 
-async function keywordSearchFallback(passJur: Jurisdiction, keywords: string[], limit: number): Promise<EnrichedRow[]> {
-  let base =
-    `/rest/v1/legal_vectors_enriched` +
-    `?select=id,code_id,citation,title,text,jurisdiction_norm,code_id_struct,article_num,url_struct` +
-    `&limit=${limit}`;
-
-  if (passJur !== "UNKNOWN") base += `&jurisdiction_norm=eq.${encodeURIComponent(passJur)}`;
-
-  const ors: string[] = [];
-  for (let i = 0; i < keywords.length; i++) {
-    const raw = keywords[i].trim().replace(/[%_]/g, "");
-    if (!raw) continue;
-    const pat = `*${raw}*`;
-    ors.push(`citation.ilike.${pat}`);
-    ors.push(`title.ilike.${pat}`);
-    ors.push(`text.ilike.${pat}`);
-  }
-
-  if (ors.length) base += `&or=(${encodeURIComponent(ors.join(","))})`;
-
-  const res = await supaGet(base);
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    console.warn("keywordSearchFallback failed:", res.status, t);
-    return [];
-  }
-  return ((await res.json()) ?? []) as EnrichedRow[];
-}
+// ------------------------------
+// Matview REST endpoints (replaces legal_vectors_enriched view)
+// ------------------------------
+const ENRICHED_RESOURCE = "legal_vectors_enriched_mv";
 
 async function pinByArticleNums(passJur: Jurisdiction, nums: string[], limit: number): Promise<EnrichedRow[]> {
   if (!nums.length) return [];
   let base =
-    `/rest/v1/legal_vectors_enriched` +
+    `/rest/v1/${ENRICHED_RESOURCE}` +
     `?select=id,code_id,citation,title,text,jurisdiction_norm,code_id_struct,article_num,url_struct` +
     `&limit=${limit}`;
 
@@ -774,87 +669,8 @@ function passOrderFor(expected: Jurisdiction): Jurisdiction[] {
   return ["QC", "CA-FED", "OTHER"];
 }
 
-async function hybridPassFromPreVector(args: {
-  passJurisdiction: Jurisdiction;
-  expected: Jurisdiction;
-  keywords: string[];
-  article: { mentioned: boolean; nums: string[] };
-  vectorPool: Array<{ row: EnrichedRow; similarity: number | null }>;
-  vectorN: number;
-  keywordN: number;
-}): Promise<{ rows: EnrichedRow[]; debug: any }> {
-  const { passJurisdiction, expected, keywords, article, vectorPool, vectorN, keywordN } = args;
-
-  const vList: Array<{ row: EnrichedRow; similarity: number | null }> = [];
-  for (let i = 0; i < vectorPool.length; i++) {
-    const it = vectorPool[i];
-    const jur = normalizeJurisdiction(it.row.jurisdiction_norm);
-    const norm: Jurisdiction = jur === "OTHER" ? "OTHER" : jur;
-    if (passJurisdiction !== "UNKNOWN" && norm !== passJurisdiction) continue;
-    vList.push(it);
-    if (vList.length >= vectorN) break;
-  }
-
-  const kRows = await keywordSearchFallback(passJurisdiction, keywords, keywordN);
-
-  const fused = new Map<number, { row: EnrichedRow; rrf: number; similarity: number | null }>();
-
-  for (let i = 0; i < vList.length; i++) {
-    const it = vList[i];
-    const prev = fused.get(it.row.id);
-    fused.set(it.row.id, {
-      row: it.row,
-      rrf: (prev ? prev.rrf : 0) + rrfScore(i + 1),
-      similarity: it.similarity ?? (prev ? prev.similarity : null),
-    });
-  }
-
-  for (let i = 0; i < kRows.length; i++) {
-    const r = kRows[i];
-    const prev = fused.get(r.id);
-    fused.set(r.id, {
-      row: r,
-      rrf: (prev ? prev.rrf : 0) + rrfScore(i + 1),
-      similarity: prev ? prev.similarity : null,
-    });
-  }
-
-  const byDedup = new Map<string, { row: EnrichedRow; composite: number }>();
-  const values = Array.from(fused.values());
-
-  for (let i = 0; i < values.length; i++) {
-    const it = values[i];
-    const scored = scoreHit({
-      row: it.row,
-      expected,
-      keywords,
-      article,
-      similarity: it.similarity,
-    });
-    const composite = it.rrf + scored.hit_quality_score * 0.15;
-    const key = dedupKey(it.row);
-    const ex = byDedup.get(key);
-    if (!ex || composite > ex.composite) byDedup.set(key, { row: it.row, composite });
-  }
-
-  const ranked = Array.from(byDedup.values())
-    .sort((a, b) => b.composite - a.composite)
-    .map((x) => x.row);
-
-  return {
-    rows: ranked,
-    debug: {
-      passJurisdiction,
-      vectorKept: vList.length,
-      keywordReturned: kRows.length,
-      fusedUnique: fused.size,
-      dedupUnique: byDedup.size,
-    },
-  };
-}
-
 // ------------------------------
-// Prompt “verrouillé” + JSON output (Central socle injected)
+// Prompt + output checks
 // ------------------------------
 const SYSTEM_PROMPT = `
 SOCLE ANTI-ERREUR / ANTI-HALLUCINATION — RÈGLES NON NÉGOCIABLES
@@ -949,7 +765,6 @@ function formatAnswerFromModel(parsed: ModelJson, sources: Source[], warning?: s
 // POST
 // ------------------------------
 export async function POST(req: Request) {
-  // ✅ Auth gate (Phase 3)
   const supabaseAuth = createClient();
   const {
     data: { user },
@@ -963,13 +778,10 @@ export async function POST(req: Request) {
 
   try {
     if (!OPENAI_API_KEY) return json({ error: "OPENAI_API_KEY manquant" }, 500);
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-      return json({ error: "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant" }, 500);
-    }
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return json({ error: "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant" }, 500);
 
     const body = (await req.json().catch(() => ({}))) as ChatRequest;
 
-    // ✅ Compat parsing: Phase 3 uses `message`
     let message =
       (typeof body.message === "string" && body.message.trim()) ||
       (typeof body.question === "string" && body.question.trim()) ||
@@ -992,7 +804,7 @@ export async function POST(req: Request) {
           details:
             "Le body JSON doit contenir soit { message: string } (Phase 3), soit { question: string }, soit { messages: [{role:'user', content:string}, ...] }.",
         },
-        { status: 400, headers: CORS_HEADERS }
+        { status: 400 }
       );
     }
 
@@ -1001,7 +813,7 @@ export async function POST(req: Request) {
     const mode = (body.mode ?? "prod").toLowerCase();
 
     // ------------------------------
-    // Phase 4B: Jurisdiction gate
+    // Jurisdiction gate
     // ------------------------------
     const gate = jurisdictionGate(message);
 
@@ -1029,95 +841,127 @@ export async function POST(req: Request) {
         user_id: user.id,
       }).catch((e) => console.warn("log insert failed:", e));
 
-      return json(
-        {
-          answer: clarify,
-          sources: [],
-          usage: {
-            type: "clarify",
-            jurisdiction_expected: "UNKNOWN",
-            jurisdiction_selected: "UNKNOWN",
-            rag_quality: 0,
-            had_qc_source: false,
-          },
+      return json({
+        answer: clarify,
+        sources: [],
+        usage: {
+          type: "clarify",
+          jurisdiction_expected: "UNKNOWN",
+          jurisdiction_selected: "UNKNOWN",
+          rag_quality: 0,
+          had_qc_source: false,
         },
-        { status: 200, headers: CORS_HEADERS }
-      );
+      });
     }
 
     const jurisdiction_expected = gate.selected;
 
     // ------------------------------
-    // Embedding + retrieval
+    // Embedding + hybrid retrieval
     // ------------------------------
     const queryEmbedding = await createEmbedding(message);
     if (!queryEmbedding) return json({ error: "Échec embedding" }, 500);
 
-    const isDev = mode === "dev";
-    const rpcName = isDev ? "search_legal_vectors_dev" : "search_legal_vectors_v2";
-
-    // ✅ Keywords + expansion (helps “no-article” questions)
     const baseKeywords = extractKeywords(message, 10);
     const { keywords, pinnedArticleNums } = expandQuery(message, baseKeywords, jurisdiction_expected);
     const article = detectArticleMention(message);
 
-    // ✅ Pin “piliers” (retrieval aid only)
+    // Pin “piliers” (retrieval aid only) — now against matview
     const pinnedRows =
       jurisdiction_expected === "QC" || jurisdiction_expected === "UNKNOWN"
         ? await pinByArticleNums("QC", pinnedArticleNums, 10)
         : [];
 
-    // ✅ Vector once (perf): get a big pool, enrich once, then do pass filtering + RRF
-    const vectorPoolSize = 160;
-    const vHits = await vectorSearchRPC(rpcName, queryEmbedding, vectorPoolSize);
+    // Call hybrid RPC ONCE (solid core)
+    const poolSize = 220;
+    let hybridHits: HybridHit[] = [];
+    let hybridError: string | null = null;
 
-    const vIds: Array<string | number> = [];
-    for (let i = 0; i < vHits.length; i++) vIds.push(vHits[i].id ?? "");
-    const enriched = await enrichByIds(vIds);
-
-    // Build vectorPool (ordered as returned)
-    const vectorPool: Array<{ row: EnrichedRow; similarity: number | null }> = [];
-    for (let i = 0; i < vHits.length; i++) {
-      const h = vHits[i];
-      const idNum = Number(h.id);
-      if (Number.isNaN(idNum)) continue;
-      const r = enriched.get(idNum);
-      if (!r) continue;
-      vectorPool.push({ row: r, similarity: typeof h.similarity === "number" ? h.similarity : null });
+    try {
+      // Optional bucket hint: if you created a bucket system, you can pass it.
+      // If the RPC ignores/doesn't accept it, the variant logic will still work.
+      hybridHits = await hybridSearchRPC({
+        query_text: message,
+        query_embedding: queryEmbedding,
+        match_count: poolSize,
+        bucket: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
+      });
+    } catch (e: any) {
+      hybridError = e?.message ?? String(e);
+      console.warn("hybridSearchRPC failed; continuing with empty hits:", hybridError);
+      hybridHits = [];
     }
 
-    const passOrder = passOrderFor(jurisdiction_expected);
+    // If RPC failed completely, we still proceed; rag_quality will drop and you’ll get clarify/refuse properly.
+    // (If you want a true legacy fallback, tell me and I’ll re-add vector-only RPC as a second path.)
 
+    const passOrder = passOrderFor(jurisdiction_expected);
     const vectorN = 70;
-    const keywordN = 45;
 
     const allRows: EnrichedRow[] = [];
     const debugPasses: any[] = [];
 
     for (let i = 0; i < pinnedRows.length; i++) allRows.push(pinnedRows[i]);
 
+    // Pass filtering over RPC results (already fused FTS+vector)
     for (let p = 0; p < passOrder.length; p++) {
       const passJur = passOrder[p];
 
-      const pass = await hybridPassFromPreVector({
+      const kept: Array<{ row: EnrichedRow; similarity: number | null }> = [];
+      for (let i = 0; i < hybridHits.length; i++) {
+        const h = hybridHits[i];
+        const jur = normalizeJurisdiction(h.jurisdiction_norm);
+        const norm: Jurisdiction = jur === "OTHER" ? "OTHER" : jur;
+        if (passJur !== "UNKNOWN" && norm !== passJur) continue;
+
+        kept.push({ row: h, similarity: typeof h.similarity === "number" ? h.similarity : null });
+        if (kept.length >= vectorN) break;
+      }
+
+      // Rank with RRF + quality score (keeps your existing guardrails)
+      const fused = new Map<number, { row: EnrichedRow; rrf: number; similarity: number | null }>();
+      for (let i = 0; i < kept.length; i++) {
+        const it = kept[i];
+        fused.set(it.row.id, { row: it.row, rrf: rrfScore(i + 1), similarity: it.similarity });
+      }
+
+      const byDedup = new Map<string, { row: EnrichedRow; composite: number }>();
+      const values = Array.from(fused.values());
+
+      for (let i = 0; i < values.length; i++) {
+        const it = values[i];
+        const scored = scoreHit({
+          row: it.row,
+          expected: jurisdiction_expected,
+          keywords,
+          article,
+          similarity: it.similarity,
+        });
+        const composite = it.rrf + scored.hit_quality_score * 0.15;
+        const key = dedupKey(it.row);
+        const ex = byDedup.get(key);
+        if (!ex || composite > ex.composite) byDedup.set(key, { row: it.row, composite });
+      }
+
+      const ranked = Array.from(byDedup.values())
+        .sort((a, b) => b.composite - a.composite)
+        .map((x) => x.row);
+
+      debugPasses.push({
         passJurisdiction: passJur,
-        expected: jurisdiction_expected,
-        keywords,
-        article,
-        vectorPool,
-        vectorN,
-        keywordN,
+        hybridHitsTotal: hybridHits.length,
+        passKept: kept.length,
+        dedupUnique: byDedup.size,
+        hybridError,
       });
-      debugPasses.push(pass.debug);
 
-      for (let i = 0; i < pass.rows.length; i++) allRows.push(pass.rows[i]);
+      for (let i = 0; i < ranked.length; i++) allRows.push(ranked[i]);
 
-      // Stop early only when expected is NOT UNKNOWN (otherwise we want evidence across buckets)
       if (p === 0 && jurisdiction_expected !== "UNKNOWN") {
         let good = 0;
-        const checkN = Math.min(pass.rows.length, 10);
+        const checkN = Math.min(ranked.length, 10);
         for (let i = 0; i < checkN; i++) {
-          const s = scoreHit({ row: pass.rows[i], expected: jurisdiction_expected, keywords, article, similarity: null });
+          const s = scoreHit({ row: ranked[i], expected: jurisdiction_expected, keywords, article, similarity: null });
           if (s.hit_quality_score >= 1.2) good++;
         }
         if (good >= 4 || pinnedRows.length >= 2) break;
@@ -1135,28 +979,18 @@ export async function POST(req: Request) {
       if (finalRows.length >= top_k) break;
     }
 
-    const sources: Source[] = [];
-    for (let i = 0; i < finalRows.length; i++) {
-      const r = finalRows[i];
-      sources.push({
-        id: r.id,
-        citation: r.citation,
-        title: r.title,
-        jur: r.jurisdiction_norm,
-        url: r.url_struct,
-        snippet: makeExcerpt(`${r.title ?? ""}\n${r.text ?? ""}`, 1100),
-      });
-    }
+    const sources: Source[] = finalRows.map((r) => ({
+      id: r.id,
+      citation: r.citation,
+      title: r.title,
+      jur: r.jurisdiction_norm,
+      url: r.url_struct,
+      snippet: makeExcerpt(`${r.title ?? ""}\n${r.text ?? ""}`, 1100),
+    }));
 
-    // ✅ Select jurisdiction based on best evidence (dominance in sources), not “QC by default”
     const jurisdiction_selected = selectJurisdictionFromSources(sources, jurisdiction_expected);
+    const rag_quality = computeRagQuality({ jurisdiction_selected, sources });
 
-    const rag_quality = computeRagQuality({
-      jurisdiction_selected,
-      sources,
-    });
-
-    // article_confidence (max on first 6)
     let article_confidence = 0;
     const scanN = Math.min(finalRows.length, 6);
     for (let i = 0; i < scanN; i++) {
@@ -1164,7 +998,6 @@ export async function POST(req: Request) {
       if (sc.article_conf > article_confidence) article_confidence = sc.article_conf;
     }
 
-    // If we truly have nothing: prefer clarification when expected UNKNOWN (don’t hard-refuse too early)
     if (rag_quality === 0) {
       if (jurisdiction_expected === "UNKNOWN") {
         const clarify =
@@ -1185,27 +1018,25 @@ export async function POST(req: Request) {
               rag_quality,
               article_confidence,
               refused_reason: "rag_quality_0_clarify_unknown",
+              hybrid_error: hybridError,
             },
           },
           usage: { mode, top_k, latency_ms: Date.now() - startedAt, debugPasses },
           user_id: user.id,
         }).catch((e) => console.warn("log insert failed:", e));
 
-        return json(
-          {
-            answer: clarify,
-            sources: [],
-            usage: {
-              type: "clarify",
-              jurisdiction_expected,
-              jurisdiction_selected,
-              rag_quality,
-              had_qc_source: false,
-              article_confidence,
-            },
+        return json({
+          answer: clarify,
+          sources: [],
+          usage: {
+            type: "clarify",
+            jurisdiction_expected,
+            jurisdiction_selected,
+            rag_quality,
+            had_qc_source: false,
+            article_confidence,
           },
-          { status: 200, headers: CORS_HEADERS }
-        );
+        });
       }
 
       const refusal =
@@ -1227,27 +1058,25 @@ export async function POST(req: Request) {
             rag_quality,
             article_confidence,
             refused_reason: "rag_quality_0_refuse",
+            hybrid_error: hybridError,
           },
         },
         usage: { mode, top_k, latency_ms: Date.now() - startedAt, debugPasses },
         user_id: user.id,
       }).catch((e) => console.warn("log insert failed:", e));
 
-      return json(
-        {
-          answer: refusal,
-          sources: [],
-          usage: {
-            type: "refuse",
-            jurisdiction_expected,
-            jurisdiction_selected,
-            rag_quality,
-            had_qc_source: false,
-            article_confidence,
-          },
+      return json({
+        answer: refusal,
+        sources: [],
+        usage: {
+          type: "refuse",
+          jurisdiction_expected,
+          jurisdiction_selected,
+          rag_quality,
+          had_qc_source: false,
+          article_confidence,
         },
-        { status: 200, headers: CORS_HEADERS }
-      );
+      });
     }
 
     const warning =
@@ -1257,7 +1086,6 @@ export async function POST(req: Request) {
           ? "Contexte faible : réponse limitée (il manque probablement des sources clés)."
           : undefined;
 
-    // ✅ Allowlist by source IDs (robust)
     const allowed_source_ids: string[] = sources.map((s) => String(s.id));
 
     const context =
@@ -1272,6 +1100,7 @@ export async function POST(req: Request) {
       `Question: ${message}`,
       `Juridiction attendue (heuristique): ${jurisdiction_expected}`,
       `Juridiction sélectionnée (sources dominantes): ${jurisdiction_selected}`,
+      hybridError ? `HYBRID_RPC_WARNING: ${hybridError}` : "",
       `Contexte:\n${context}`,
       `allowed_source_ids:\n${allowed_source_ids.map((id) => `- ${id}`).join("\n") || "(vide)"}`,
       "",
@@ -1297,7 +1126,9 @@ export async function POST(req: Request) {
 IMPORTANT:
 - source_ids_used doit être un sous-ensemble exact de allowed_source_ids.
 - Si tu ne peux pas soutenir une règle clé avec une source: type="refuse" (ou "clarify" si un fait critique manque).`,
-    ].join("\n\n");
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
     const completion = await createChatCompletion([
       { role: "system", content: SYSTEM_PROMPT },
@@ -1306,7 +1137,6 @@ IMPORTANT:
 
     const parsed = safeJsonParse<ModelJson>(completion.content);
 
-    // Post-check serveur: JSON must parse
     if (!parsed) {
       const refusal =
         "Je ne peux pas répondre de façon fiable (sortie invalide). " +
@@ -1326,18 +1156,18 @@ IMPORTANT:
             rag_quality,
             article_confidence,
             refused_reason: "json_parse_failed",
+            hybrid_error: hybridError,
           },
         },
         usage: { mode, top_k, latency_ms: Date.now() - startedAt, openai_usage: completion.usage ?? null, debugPasses },
         user_id: user.id,
       }).catch((e) => console.warn("log insert failed:", e));
 
-      return json({ answer: refusal, sources: [], usage: { type: "refuse", rag_quality } }, { status: 200, headers: CORS_HEADERS });
+      return json({ answer: refusal, sources: [], usage: { type: "refuse", rag_quality } });
     }
 
     if (warning && parsed.type === "answer") parsed.warning = warning;
 
-    // Hard rule: if "answer", must cite at least 1 allowed source id
     if (parsed.type === "answer" && (!parsed.source_ids_used || parsed.source_ids_used.length === 0)) {
       parsed.type = "refuse";
       parsed.refusal_reason = "Information non disponible dans le corpus actuel. (Réponse sans source_ids_used détectée)";
@@ -1367,18 +1197,18 @@ IMPORTANT:
             rag_quality,
             article_confidence,
             refused_reason: "allowlist_violation",
+            hybrid_error: hybridError,
           },
         },
         usage: { mode, top_k, latency_ms: Date.now() - startedAt, openai_usage: completion.usage ?? null, debugPasses },
         user_id: user.id,
       }).catch((e) => console.warn("log insert failed:", e));
 
-      return json({ answer: refusal, sources: [], usage: { type: "refuse", rag_quality } }, { status: 200, headers: CORS_HEADERS });
+      return json({ answer: refusal, sources: [], usage: { type: "refuse", rag_quality } });
     }
 
     const answer = formatAnswerFromModel(parsed, sources, warning);
 
-    // Log QA
     await supaPost("/rest/v1/logs", {
       question: message,
       profile_slug: profile ?? null,
@@ -1392,30 +1222,27 @@ IMPORTANT:
           rag_quality,
           article_confidence,
           refused_reason: parsed.type === "refuse" ? parsed.refusal_reason ?? null : null,
+          hybrid_error: hybridError,
         },
       },
       usage: { mode, top_k, latency_ms: Date.now() - startedAt, openai_usage: completion.usage ?? null, debugPasses },
       user_id: user.id,
     }).catch((e) => console.warn("log insert failed:", e));
 
-    // ✅ Phase 3 response contract
-    return json(
-      {
-        answer,
-        sources,
-        usage: {
-          type: parsed.type,
-          jurisdiction_expected,
-          jurisdiction_selected,
-          rag_quality,
-          had_qc_source: sources.some((s) => normalizeJurisdiction(s.jur ?? "") === "QC"),
-          article_confidence,
-        },
+    return json({
+      answer,
+      sources,
+      usage: {
+        type: parsed.type,
+        jurisdiction_expected,
+        jurisdiction_selected,
+        rag_quality,
+        had_qc_source: sources.some((s) => normalizeJurisdiction(s.jur ?? "") === "QC"),
+        article_confidence,
       },
-      { status: 200, headers: CORS_HEADERS }
-    );
+    });
   } catch (e: any) {
     console.error("chat route error:", e);
-    return json({ error: e?.message ?? "Unknown error" }, { status: 500, headers: CORS_HEADERS });
+    return json({ error: e?.message ?? "Unknown error" }, 500);
   }
 }
