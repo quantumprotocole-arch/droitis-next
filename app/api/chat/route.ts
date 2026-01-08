@@ -111,6 +111,12 @@ function containsAny(hay: string, needles: string[]) {
   return false;
 }
 
+function makeExcerpt(text: string, maxLen = 900): string {
+  const t = (text || "").replace(/\s+/g, " ").trim();
+  if (t.length <= maxLen) return t;
+  return t.slice(0, maxLen) + "…";
+}
+
 // ------------------------------
 // Jurisdiction + domain signals (no-block, majority unless exception)
 // ------------------------------
@@ -385,63 +391,84 @@ function hasQcProvPenalSignals(q: string): boolean {
 
 function defaultJurisdictionByDomain(domain: Domain): Jurisdiction {
   // logique “majoritaire” au Québec :
-  // - civil/santé/procédure/admin => QC
+  // - civil/santé/admin => QC
   // - pénal “substantif” => CA-FED (sauf signaux pénal provincial)
-  // - fiscal => souvent mixte => UNKNOWN (laisser l’algorithme récupérer QC + CA-FED)
+  // - fiscal => mixte => UNKNOWN (laisser le retrieval récupérer QC + CA-FED)
   if (domain === "Penal") return "CA-FED";
   if (domain === "Fiscal") return "UNKNOWN";
   return "QC";
 }
 
-function detectJurisdictionExpected(message: string, domain: Domain): Jurisdiction {
-  // 1) signaux explicites (prioritaires)
-  if (hasQcLegalSignals(message)) return "QC";
-  if (hasFedLegalSignals(message)) return "CA-FED";
+type Gate = {
+  selected: Jurisdiction;
+  reason: string;
+  lock: boolean; // ✅ si true, on ne change PAS la juridiction même si les sources dominantes sont ailleurs
+  pitfall_keyword?: string | null;
+  assumptions: {
+    union_assumed: boolean; // false si non mentionné
+    penal_provincial_assumed: boolean;
+  };
+};
 
-  // 2) OTHER géographique explicite
+function detectJurisdictionExpected(message: string, domain: Domain): { selected: Jurisdiction; reason: string; lock: boolean; pitfall_keyword?: string | null } {
+  // 1) signaux explicites (prioritaires, lock)
+  if (hasQcLegalSignals(message)) return { selected: "QC", reason: "explicit_qc_signal", lock: true };
+  if (hasFedLegalSignals(message)) return { selected: "CA-FED", reason: "explicit_fed_signal", lock: true };
+
+  // 2) OTHER géographique explicite (lock)
   const s = message.toLowerCase();
   const otherSignals = ["ontario", "alberta", "colombie-britannique", "british columbia", "france", "europe", "usa", "états-unis", "etats-unis"];
-  if (containsAny(s, otherSignals)) return "OTHER";
+  if (containsAny(s, otherSignals)) return { selected: "OTHER", reason: "explicit_other_geo", lock: true };
 
   // 3) par domaine + exceptions fréquentes
   if (domain === "Penal") {
-    // pénal provincial (CSR, tickets municipaux, etc.) => QC
-    if (hasQcProvPenalSignals(message)) return "QC";
-    // criminel “substantif” => CA-FED
-    if (hasPenalSignals(message)) return "CA-FED";
-    return defaultJurisdictionByDomain(domain);
+    // pénal provincial (CSR, tickets municipaux, etc.) => QC (lock)
+    if (hasQcProvPenalSignals(message)) return { selected: "QC", reason: "penal_provincial_qc", lock: true };
+    // criminel “substantif” => CA-FED (lock)
+    if (hasPenalSignals(message)) return { selected: "CA-FED", reason: "penal_substantive_fed", lock: true };
+    return { selected: defaultJurisdictionByDomain(domain), reason: "penal_default_majority", lock: false };
   }
 
   if (domain === "Travail") {
-    // défaut QC, sauf secteurs fédéraux / employeur fédéral
+    // défaut QC, sauf secteurs fédéraux / employeur fédéral (lock)
     const fedSector = hasFedWorkSectorSignals(message);
-    if (fedSector.matched) return "CA-FED";
-    if (hasFedPublicEmployerSignals(message)) return "CA-FED";
-    return "QC";
+    if (fedSector.matched) return { selected: "CA-FED", reason: "work_federal_sector_exception", lock: true, pitfall_keyword: fedSector.keyword ?? null };
+    if (hasFedPublicEmployerSignals(message)) return { selected: "CA-FED", reason: "work_federal_public_employer", lock: true };
+    return { selected: "QC", reason: "work_default_qc_majority", lock: false };
   }
 
   if (domain === "Admin") {
-    // défaut QC, sauf organisme/tribunal fédéral explicitement
-    if (hasFedAdminAgencySignals(message)) return "CA-FED";
-    return "QC";
+    // défaut QC, sauf organisme/tribunal fédéral explicitement (lock)
+    if (hasFedAdminAgencySignals(message)) return { selected: "CA-FED", reason: "admin_federal_agency_exception", lock: true };
+    return { selected: "QC", reason: "admin_default_qc_majority", lock: false };
   }
 
   if (domain === "Fiscal") {
-    // fiscalité = 2 régimes; si signal clair, on choisit, sinon on ouvre
-    if (containsAny(s, ["revenu québec", "revenu quebec", "rq", "tvq"])) return "QC";
-    if (containsAny(s, ["arc", "cra", "agence du revenu du canada", "tps", "gst"])) return "CA-FED";
-    return "UNKNOWN";
+    // fiscalité = 2 régimes; si signal clair, lock; sinon UNKNOWN
+    if (containsAny(s, ["revenu québec", "revenu quebec", "tvq"])) return { selected: "QC", reason: "fiscal_qc_signal", lock: true };
+    if (containsAny(s, ["arc", "cra", "agence du revenu du canada", "tps", "gst"])) return { selected: "CA-FED", reason: "fiscal_fed_signal", lock: true };
+    return { selected: "UNKNOWN", reason: "fiscal_mixed_default", lock: false };
   }
 
-  if (domain === "Sante") return "QC";
-  if (domain === "Civil") return "QC";
+  if (domain === "Sante") return { selected: "QC", reason: "health_default_qc_majority", lock: false };
+  if (domain === "Civil") return { selected: "QC", reason: "civil_default_qc_majority", lock: false };
 
   // 4) défaut majoritaire
-  return defaultJurisdictionByDomain(domain);
+  return { selected: defaultJurisdictionByDomain(domain), reason: "domain_default_majority", lock: false };
 }
 
-function jurisdictionGateNoBlock(message: string, domain: Domain): { selected: Jurisdiction; reason: string } {
-  return { selected: detectJurisdictionExpected(message, domain), reason: "majority_unless_exception_no_block" };
+function jurisdictionGateNoBlock(message: string, domain: Domain): Gate {
+  const base = detectJurisdictionExpected(message, domain);
+  return {
+    selected: base.selected,
+    reason: base.reason,
+    lock: base.lock,
+    pitfall_keyword: base.pitfall_keyword ?? null,
+    assumptions: {
+      union_assumed: hasUnionSignals(message), // si absent => false (non syndiqué)
+      penal_provincial_assumed: domain === "Penal" ? hasQcProvPenalSignals(message) : false,
+    },
+  };
 }
 
 // ------------------------------
@@ -450,7 +477,7 @@ function jurisdictionGateNoBlock(message: string, domain: Domain): { selected: J
 function detectDomain(message: string): Domain {
   const s = message.toLowerCase();
 
-  if (hasPenalSignals(message)) return "Penal";
+  if (hasPenalSignals(message) || hasQcProvPenalSignals(message)) return "Penal";
   if (hasWorkSignals(message)) return "Travail";
   if (hasHealthSignals(message)) return "Sante";
 
@@ -549,7 +576,7 @@ function detectArticleMention(q: string): { mentioned: boolean; nums: string[] }
   return { mentioned: nums.length > 0, nums };
 }
 
-function expandQuery(message: string, baseKeywords: string[], expected: Jurisdiction) {
+function expandQuery(message: string, baseKeywords: string[], expected: Jurisdiction, unionAssumed: boolean) {
   const s = message.toLowerCase();
   const kw = [...baseKeywords];
 
@@ -601,7 +628,7 @@ function expandQuery(message: string, baseKeywords: string[], expected: Jurisdic
     add("recours");
 
     // ✅ par défaut: non syndiqué (si rien n’est mentionné)
-    if (hasUnionSignals(message)) {
+    if (unionAssumed) {
       add("syndicat");
       add("grief");
       add("convention collective");
@@ -615,16 +642,15 @@ function expandQuery(message: string, baseKeywords: string[], expected: Jurisdic
     }
   }
 
-  if (hasPenalSignals(message)) {
-    add("fouille");
-    add("perquisition");
-    add("saisie");
-    add("déclaration");
-    add("declaration");
+  if (hasPenalSignals(message) || hasQcProvPenalSignals(message)) {
+    add("constat");
+    add("infraction");
+    add("procédure");
+    add("procedure");
+    add("défendeur");
+    add("defendeur");
     add("preuve");
-    add("police");
-    add("charte");
-    add("exclusion");
+    add("audience");
   }
 
   if (hasHealthSignals(message)) {
@@ -641,20 +667,17 @@ function expandQuery(message: string, baseKeywords: string[], expected: Jurisdic
 }
 
 // ------------------------------
-// Ranking / scoring
+// Dedup
 // ------------------------------
-function makeExcerpt(text: string, maxLen = 900): string {
-  const t = (text || "").replace(/\s+/g, " ").trim();
-  if (t.length <= maxLen) return t;
-  return t.slice(0, maxLen) + "…";
-}
-
 function dedupKey(r: EnrichedRow): string {
   if (r.code_id_struct && r.article_num) return `${r.code_id_struct}::${r.article_num}`;
   if (r.citation) return `CIT::${r.citation}`;
   return `ID::${r.id}`;
 }
 
+// ------------------------------
+// Ranking / scoring
+// ------------------------------
 function scoreHit(args: {
   row: EnrichedRow;
   expected: Jurisdiction;
@@ -729,7 +752,7 @@ function selectJurisdictionFromSources(sources: Source[], fallback: Jurisdiction
 }
 
 // ------------------------------
-// Coverage signals (minimum viable rules)
+// Coverage signals
 // ------------------------------
 function isCharterSource(r: EnrichedRow): boolean {
   const hay = `${r.citation ?? ""} ${r.title ?? ""} ${r.text ?? ""}`.toLowerCase();
@@ -770,21 +793,68 @@ function hasEvidenceExclusionSignals(message: string): boolean {
   return containsAny(s, ["exclusion", "preuve illégale", "preuve illegale", "admissibilité", "admissibilite", "atteinte", "violation"]);
 }
 
+// ------------------------------
+// Jurisdiction scope & filtering (CRUCIAL: prevent wrong-regime answers)
+// ------------------------------
+function allowRowByScope(args: {
+  row: EnrichedRow;
+  domain: Domain;
+  jurisdiction_expected: Jurisdiction;
+  jurisdiction_selected: Jurisdiction;
+  gate: Gate;
+}): boolean {
+  const { row, domain, jurisdiction_selected, gate } = args;
+
+  const rowJur0 = normalizeJurisdiction(row.jurisdiction_norm);
+  const rowJur: Jurisdiction = rowJur0 === "OTHER" ? "OTHER" : rowJur0;
+
+  // UNKNOWN => open (but we still try to prioritize expected in ranking)
+  if (jurisdiction_selected === "UNKNOWN") {
+    // in practice, still exclude OTHER unless expected OTHER
+    if (rowJur === "OTHER" && gate.selected !== "OTHER") return false;
+    return true;
+  }
+
+  // Fiscal => allow both QC and CA-FED (by nature). Exclude OTHER by default.
+  if (domain === "Fiscal") {
+    if (rowJur === "QC" || rowJur === "CA-FED") return true;
+    return false;
+  }
+
+  // Penal QC (tickets CSR/municipal): allow QC + (Charter sources) because it can apply to provincial prosecutions.
+  if (domain === "Penal" && jurisdiction_selected === "QC") {
+    if (rowJur === "QC") return true;
+    if (rowJur === "CA-FED" && isCharterSource(row)) return true;
+    return false;
+  }
+
+  // Otherwise strict: only the selected jurisdiction.
+  return rowJur === jurisdiction_selected;
+}
+
+// ------------------------------
+// Coverage computation (with lock awareness)
+// ------------------------------
 function computeCoverage(args: {
   domain: Domain;
   message: string;
   finalRows: EnrichedRow[];
   jurisdiction_selected: Jurisdiction;
+  gate: Gate;
 }): { coverage_ok: boolean; missing_coverage: string[]; ingest_needed: string[] } {
-  const { domain, message, finalRows, jurisdiction_selected } = args;
+  const { domain, message, finalRows, jurisdiction_selected, gate } = args;
 
   const missing: string[] = [];
   const ingest: string[] = [];
 
   if (finalRows.length === 0) {
+    // When locked, say explicitly we cannot safely import the wrong regime.
+    const lockNote = gate.lock
+      ? "Juridiction verrouillée par exception/signaux; aucune source de cette juridiction n’est disponible."
+      : "Aucune source pertinente dans le corpus.";
     return {
       coverage_ok: false,
-      missing_coverage: ["Aucune source pertinente dans le corpus."],
+      missing_coverage: [lockNote],
       ingest_needed: ["Ajouter les textes (loi + juridiction) pertinents à la question."],
     };
   }
@@ -796,15 +866,21 @@ function computeCoverage(args: {
     const hasCrCode = finalRows.some(isCriminalCodeSource);
     const hasEv = hasEvidenceExclusionSignals(message);
 
-    ok = hasCrCode && (hasCharter || hasEv);
-
-    if (!hasCrCode) {
-      missing.push("Code criminel (disposition pertinente) non trouvé dans les extraits.");
-      ingest.push("Ajouter au corpus les dispositions pertinentes du Code criminel (Canada) liées à la fouille/détention/déclarations/preuve selon la question.");
-    }
-    if (!hasCharter) {
-      missing.push("Charte canadienne (droit invoqué) non trouvée dans les extraits.");
-      ingest.push("Ajouter au corpus les extraits pertinents de la Charte canadienne (droits et réparations) liés à la question.");
+    // If penal CA-FED => want Criminal Code + (Charter if relevant / or evidence exclusion signal)
+    if (jurisdiction_selected === "CA-FED") {
+      ok = hasCrCode && (hasCharter || hasEv);
+      if (!hasCrCode) {
+        missing.push("Code criminel (disposition pertinente) non trouvé dans les extraits.");
+        ingest.push("Ajouter au corpus les dispositions pertinentes du Code criminel (Canada) selon la question (fouille/détention/preuve, etc.).");
+      }
+      if (!hasCharter) {
+        missing.push("Charte canadienne (droit invoqué) non trouvée dans les extraits.");
+        ingest.push("Ajouter au corpus les extraits pertinents de la Charte canadienne (droits/réparations) liés à la question.");
+      }
+    } else {
+      // Penal QC (ticket/CSR): want Code de procédure pénale / CSR / règlement municipal (selon la question)
+      // (On ne peut pas deviner les articles exacts si non dans le corpus)
+      ok = finalRows.length >= 1;
     }
   }
 
@@ -814,8 +890,8 @@ function computeCoverage(args: {
     if (work && jurisdiction_selected === "CA-FED") {
       ok = hasCLC;
       if (!hasCLC) {
-        missing.push("Code canadien du travail (recours / congédiement) non trouvé dans les extraits.");
-        ingest.push("Ajouter au corpus le Code canadien du travail (parties sur congédiement/recours, selon le cas) ou sources officielles équivalentes.");
+        missing.push("Régime fédéral du travail : extraits pertinents absents (ex. textes sur congédiement/recours/délais).");
+        ingest.push("Ajouter au corpus le texte fédéral applicable au travail (ex. Code canadien du travail : parties sur congédiement/recours, selon le cas).");
       }
     }
   }
@@ -826,7 +902,7 @@ function computeCoverage(args: {
     ok = hasCCQ || hasHealth;
     if (!hasCCQ && !hasHealth) {
       missing.push("Base légale santé QC (CCQ ou loi santé/accès pertinente) non trouvée dans les extraits.");
-      ingest.push("Ajouter au corpus les articles CCQ pertinents (consentement/aptitude/soins) et/ou la loi québécoise applicable (ex. accès/SSS) selon la question.");
+      ingest.push("Ajouter au corpus les articles CCQ pertinents (consentement/aptitude/soins) et/ou la loi québécoise applicable selon la question.");
     }
   }
 
@@ -836,13 +912,9 @@ function computeCoverage(args: {
     const hasAny = finalRows.some((r) => (r.article_num ? wanted.includes(r.article_num) : false));
     if (!hasAny) {
       missing.push(`Article(s) mentionné(s) (${wanted.join(", ")}) non trouvé(s) dans les extraits.`);
-      ingest.push(`Ajouter au corpus les articles exacts demandés (${wanted.join(", ")}) (loi + juridiction) ou un extrait officiel contenant ces articles.`);
+      ingest.push(`Ajouter au corpus les articles exacts demandés (${wanted.join(", ")}) (loi + juridiction) ou un extrait officiel les contenant.`);
       ok = domain === "Penal" || domain === "Travail" || domain === "Sante" ? ok : false;
     }
-  }
-
-  if (jurisdiction_selected === "UNKNOWN") {
-    ok = finalRows.length >= 1;
   }
 
   return { coverage_ok: ok, missing_coverage: missing, ingest_needed: ingest };
@@ -869,16 +941,19 @@ function computeRagQuality(args: {
   coverage_ok: boolean;
   domain: Domain;
 }): 0 | 1 | 2 | 3 {
-  const { jurisdiction_expected, sources, relevance_ok, coverage_ok } = args;
+  const { jurisdiction_expected, jurisdiction_selected, sources, relevance_ok, coverage_ok, domain } = args;
 
   const n = sources.length;
   if (n === 0) return 0;
 
+  // For fiscal mixed, tolerate mixed selection.
+  const fiscalMixed = domain === "Fiscal" && jurisdiction_selected === "UNKNOWN";
+
   let match = 0;
-  if (jurisdiction_expected !== "UNKNOWN") {
+  if (jurisdiction_expected !== "UNKNOWN" && !fiscalMixed) {
     for (let i = 0; i < sources.length; i++) {
-      const j = normalizeJurisdiction(sources[i].jur ?? "");
-      const norm: Jurisdiction = j === "OTHER" ? "OTHER" : j;
+      const j0 = normalizeJurisdiction(sources[i].jur ?? "");
+      const norm: Jurisdiction = j0 === "OTHER" ? "OTHER" : j0;
       if (norm === jurisdiction_expected) match++;
     }
   } else {
@@ -887,7 +962,7 @@ function computeRagQuality(args: {
 
   let base: 0 | 1 | 2 = 1;
   if (n >= 2 && (jurisdiction_expected === "UNKNOWN" || match >= 1)) base = 2;
-  if (jurisdiction_expected !== "UNKNOWN" && match === 0) base = 1;
+  if (jurisdiction_expected !== "UNKNOWN" && !fiscalMixed && match === 0) base = 1;
 
   if (base === 2 && relevance_ok && coverage_ok) return 3;
   if (base === 2) return 2;
@@ -897,23 +972,41 @@ function computeRagQuality(args: {
 // ------------------------------
 // Always-answer fallback (no block)
 // ------------------------------
-function buildAlwaysAnswerFallback(args: { message: string; domain: Domain; jurisdiction_expected: Jurisdiction; hybridError?: string | null }): string {
-  const { message, domain, jurisdiction_expected, hybridError } = args;
-
+function buildAlwaysAnswerFallback(args: {
+  message: string;
+  domain: Domain;
+  gate: Gate;
+  hybridError?: string | null;
+  missing_coverage?: string[];
+  ingest_needed?: string[];
+}): string {
+  const { message, domain, gate, hybridError } = args;
   const warn = hybridError ? `⚠️ HYBRID_RPC_WARNING: ${hybridError}\n\n` : "";
+
+  const unionTxt = gate.assumptions.union_assumed ? "syndiqué (signal détecté)" : "NON syndiqué (hypothèse par défaut: aucun signal)";
+  const jurTxt = gate.selected;
+
+  const missing = (args.missing_coverage ?? []).length ? (args.missing_coverage ?? []).map((x) => `- ${x}`).join("\n") : "- Aucune source pertinente (ou aucune source dans la juridiction applicable).";
+  const ingest = (args.ingest_needed ?? []).length
+    ? (args.ingest_needed ?? []).map((x) => `- ${x}`).join("\n")
+    : [
+        "- Texte officiel de la loi/règlement pertinent (QC ou CA selon la situation)",
+        "- Articles précis visés (si connus)",
+        "- Toute politique/contrat/convention collective si applicable (sinon hypothèse par défaut: non syndiqué)",
+      ].join("\n");
+
   return (
     `${warn}` +
-    `**Juridiction applicable (par défaut/heuristique) : ${jurisdiction_expected}**\n` +
+    `**Juridiction applicable (heuristique/exception) : ${jurTxt}**\n` +
     `**Domaine : ${domain}**\n\n` +
-    `⚠️ Réponse partielle : le corpus ne contient pas d’extraits suffisamment pertinents pour répondre au fond sans inventer.\n\n` +
+    `⚠️ Réponse partielle : je ne peux pas appliquer un autre régime juridique “par défaut” si la juridiction est verrouillée par une exception (ex. secteur fédéral).\n\n` +
+    `**Hypothèses par défaut utilisées**\n- Travail : ${unionTxt}\n\n` +
     `**Problème**\n${message}\n\n` +
-    `**Règle**\nInformation non disponible dans le corpus actuel.\n\n` +
-    `**Application**\nJe ne peux appliquer que des règles présentes dans les extraits; ici, il n’y en a pas de pertinents.\n\n` +
+    `**Règle**\nInformation non disponible dans le corpus actuel (ou sources insuffisantes dans la juridiction applicable).\n\n` +
+    `**Application**\nSans extraits du régime applicable, je ne peux pas conclure au fond sans inventer.\n\n` +
     `**Conclusion**\nImpossible de trancher au fond avec certitude à partir du corpus actuel.\n\n` +
-    `**À ingérer pour compléter (ingest_needed)**\n` +
-    `- Texte officiel de la loi/règlement pertinent (QC ou CA selon la situation)\n` +
-    `- Articles précis visés (si connus)\n` +
-    `- Toute politique/contrat/convention collective si applicable (sinon, hypothèse par défaut: non syndiqué)\n`
+    `**Couverture manquante (missing_coverage)**\n${missing}\n\n` +
+    `**À ingérer pour compléter (ingest_needed)**\n${ingest}\n`
   );
 }
 
@@ -987,21 +1080,8 @@ async function supaPost(path: string, body: any) {
 }
 
 // ------------------------------
-// Hybrid RPC search (FTS + vector) — RPC ONLY (Phase 4B final)
+// Hybrid RPC search (FTS + vector) — RPC ONLY
 // ------------------------------
-
-// (gardés pour compat future; on ne filtre plus la RPC)
-function toDbJurisdictionNorm(j: Jurisdiction): string | null {
-  if (j === "QC") return "QC";
-  if (j === "CA-FED") return "CA";
-  return null;
-}
-function toDbBucket(j: Jurisdiction): string | null {
-  if (j === "QC") return "QC";
-  if (j === "CA-FED") return "CA";
-  return null;
-}
-
 async function callRpc<T>(rpcName: string, body: any): Promise<T[]> {
   const rpcRes = await supaPost(`/rest/v1/rpc/${rpcName}`, body);
   if (!rpcRes.ok) {
@@ -1034,28 +1114,33 @@ async function hybridSearchRPC(args: {
 }
 
 // ------------------------------
-// Prompt + output checks (Phase 4B — “verrouillé” + réponse graduée)
+// Prompt + output checks — "verrouillé" + no-hallucination + no-block
 // ------------------------------
 const SYSTEM_PROMPT = `
-Tu es Droitis, tuteur IA spécialisé en droit québécois (QC).
+Tu es Droitis, tuteur IA spécialisé en droit québécois ET canadien (QC/CA-FED) selon la juridiction applicable.
 Tu réponds en ILAC/IRAC : Problème → Règle → Application → Conclusion.
-Interdiction absolue : inventer une loi, un article, une décision, une citation, ou un lien.
-Tu ne cites QUE ce qui est présent dans sources[] et dans l’allowlist fournie.
-Si une information n’est pas disponible dans les sources : tu dois le dire et expliquer quoi ingérer.
-Tu dois annoncer la juridiction applicable avant d’énoncer la règle.
+
+INTERDICTIONS
+- Interdiction absolue : inventer une loi, un article, une décision, une citation, ou un lien.
+- Tu ne cites QUE ce qui est présent dans sources[] et dans l’allowlist fournie.
+- Si une information n’est pas disponible dans les sources : tu dois le dire et expliquer quoi ingérer.
+
+RÈGLES DE JURIDICTION
+- Tu annonces la juridiction applicable avant d’énoncer la règle.
+- Si la juridiction est verrouillée (lock=true), tu NE DOIS PAS appliquer un autre régime (ex: CNESST/TAT si CA-FED).
+- Si les extraits disponibles ne couvrent pas la juridiction verrouillée, tu réponds PARTIELLEMENT et tu demandes d’ingérer le bon texte.
 
 HYPOTHÈSES PAR DÉFAUT (si non mentionné)
 1) Travail : travailleur NON syndiqué.
 2) Juridiction : appliquer la juridiction majoritaire du domaine, sauf signal explicite ou exception typique
    (ex. banques/télécom/transport interprovincial => fédéral en droit du travail; criminel => fédéral; ticket CSR/municipal => QC).
-3) Tu dois indiquer explicitement dans l’Application quand tu relies ton raisonnement à une hypothèse par défaut.
+3) Tu indiques explicitement dans l’Application quand tu relies ton raisonnement à une hypothèse par défaut.
 
 PHASE 4B — RÉPONSE GRADUÉE (IMPORTANT)
 - Le refus total doit être rare.
 - Si les sources sont partielles mais pertinentes : réponds quand même prudemment (partial=true),
   et liste précisément missing_coverage[] + ingest_needed[].
-- Tu n’as pas le droit de mentionner un article/arrêt/numéro/test précis s’il n’est pas dans l’allowlist.
-- Ne “complète” jamais avec du plausible : si non supporté → “Information non disponible dans le corpus actuel” + ingest_needed.
+- Ne “complète” jamais avec du plausible.
 `.trim();
 
 type ModelJson = {
@@ -1120,10 +1205,47 @@ function redactUnsupportedRefs(text: string, allowedCitationsLower: string): { t
   return { text: out, redactions };
 }
 
+// ------------------------------
+// Minimal “server ILAC” (only when needed to prevent wrong-regime drift)
+// ------------------------------
+function buildServerIlacFallback(args: {
+  message: string;
+  domain: Domain;
+  jurisdiction: Jurisdiction;
+  gate: Gate;
+  cov: { missing_coverage: string[]; ingest_needed: string[] };
+}): NonNullable<ModelJson["ilac"]> {
+  const { message, domain, jurisdiction, gate } = args;
+
+  const unionTxt = gate.assumptions.union_assumed
+    ? "syndiqué (signal détecté)"
+    : "non syndiqué (hypothèse par défaut, aucun signal)";
+
+  const assumptions =
+    domain === "Travail"
+      ? `Hypothèse travail: ${unionTxt}.`
+      : "Hypothèses: faits non précisés → hypothèses communes appliquées.";
+
+  return {
+    probleme: message,
+    regle:
+      "Je me limite strictement aux extraits disponibles dans le corpus. " +
+      "Si le corpus ne contient pas les textes applicables à la juridiction retenue, l’information juridique de fond n’est pas disponible ici.",
+    application:
+      `${assumptions} ` +
+      "Comme les extraits nécessaires au régime applicable ne sont pas présents (ou insuffisants), je ne peux pas appliquer une règle de fond sans risquer d’inventer ou d’importer un mauvais régime.",
+    conclusion:
+      `Réponse partielle. Pour compléter, il faut ingérer les textes du régime ${jurisdiction} pertinents (voir ingest_needed).`,
+  };
+}
+
+
+// ------------------------------
+// Format answer
+// ------------------------------
 function formatAnswerFromModel(parsed: ModelJson, sources: Source[], serverWarning?: string): string {
-  // ⚠️ no-block policy: même si le modèle renvoie "clarify", on ne bloque pas (normalisation plus bas).
   if (parsed.type === "clarify") {
-    return parsed.clarification_question ?? "Je réponds par défaut selon les hypothèses communes; indique les précisions si tu veux raffiner.";
+    return parsed.clarification_question ?? "Je réponds par défaut selon les hypothèses communes; indique des précisions si tu veux raffiner.";
   }
 
   if (parsed.type === "refuse") {
@@ -1167,7 +1289,7 @@ function formatAnswerFromModel(parsed: ModelJson, sources: Source[], serverWarni
     : "";
 
   return [
-    `**Juridiction applicable (selon le corpus) : ${parsed.jurisdiction}**`,
+    `**Juridiction applicable (selon le système) : ${parsed.jurisdiction}**`,
     parsed.domain ? `**Domaine : ${parsed.domain}**` : "",
     warn,
     partial,
@@ -1181,6 +1303,50 @@ function formatAnswerFromModel(parsed: ModelJson, sources: Source[], serverWarni
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+// ------------------------------
+// “Wrong-regime” detector (server guardrail)
+// ------------------------------
+const QC_LABOUR_FORBIDDEN_IF_FED = ["cnesst", "tribunal administratif du travail", "tat", "normes du travail", "commission des normes", "rlrq", "loi sur les normes", "lnt"];
+const FED_LABOUR_FORBIDDEN_IF_QC = ["code canadien du travail", "canada labour code", "l.c. 1985", "l-2"];
+
+function hasForbiddenRegimeLeak(args: { text: string; domain: Domain; jurisdiction: Jurisdiction }): boolean {
+  const t = (args.text ?? "").toLowerCase();
+  if (args.domain !== "Travail") return false;
+  if (args.jurisdiction === "CA-FED") return containsAny(t, QC_LABOUR_FORBIDDEN_IF_FED);
+  if (args.jurisdiction === "QC") return containsAny(t, FED_LABOUR_FORBIDDEN_IF_QC);
+  return false;
+}
+
+// ------------------------------
+// Source picking improvement (when model picks none)
+// ------------------------------
+function bestFallbackSourceIds(args: { sources: Source[]; domain: Domain; jurisdiction: Jurisdiction }): Array<string | number> {
+  const { sources, domain, jurisdiction } = args;
+  if (!sources.length) return [];
+
+  const score = (s: Source) => {
+    const jur0 = normalizeJurisdiction(s.jur ?? "");
+    const jur: Jurisdiction = jur0 === "OTHER" ? "OTHER" : jur0;
+
+    let sc = 0;
+    if (jurisdiction !== "UNKNOWN" && jur === jurisdiction) sc += 2;
+    if (domain === "Penal" && ((s.citation ?? "").toLowerCase().includes("procédure pénale") || (s.citation ?? "").toLowerCase().includes("procédure penale"))) sc += 1;
+    if (domain === "Travail" && ((s.citation ?? "").toLowerCase().includes("travail") || (s.citation ?? "").toLowerCase().includes("normes"))) sc += 1;
+    if (domain === "Fiscal" && ((s.citation ?? "").toLowerCase().includes("impôt") || (s.citation ?? "").toLowerCase().includes("impot") || (s.citation ?? "").toLowerCase().includes("tax"))) sc += 1;
+
+    // Prefer “art.” over random
+    if (/^art\./i.test((s.citation ?? "").trim())) sc += 0.5;
+
+    // Penal: prefer CPP / CSR rather than unrelated (like insolvency)
+    if (domain === "Penal" && ((s.citation ?? "").toLowerCase().includes("faillite") || (s.citation ?? "").toLowerCase().includes("insolv"))) sc -= 2;
+
+    return sc;
+  };
+
+  const ranked = [...sources].sort((a, b) => score(b) - score(a));
+  return ranked.slice(0, Math.min(2, ranked.length)).map((x) => x.id);
 }
 
 // ------------------------------
@@ -1231,20 +1397,20 @@ export async function POST(req: Request) {
     const mode = (body.mode ?? "prod").toLowerCase();
 
     // ------------------------------
-    // Domain + Jurisdiction (NO-BLOCK, majority unless exception)
+    // Domain + Jurisdiction (NO-BLOCK)
     // ------------------------------
     const domain_detected = detectDomain(message);
     const gate = jurisdictionGateNoBlock(message, domain_detected);
     const jurisdiction_expected = gate.selected;
 
     // ------------------------------
-    // Embedding + hybrid retrieval (RPC ONLY — 1 call)
+    // Embedding + hybrid retrieval (RPC ONLY — 1 call, no filter to allow mixed where needed)
     // ------------------------------
     const queryEmbedding = await createEmbedding(message);
     if (!queryEmbedding) return json({ error: "Échec embedding" }, 500);
 
     const baseKeywords = extractKeywords(message, 10);
-    const { keywords } = expandQuery(message, baseKeywords, jurisdiction_expected);
+    const { keywords } = expandQuery(message, baseKeywords, jurisdiction_expected, gate.assumptions.union_assumed);
     const article = detectArticleMention(message);
 
     const poolSize = 220;
@@ -1252,7 +1418,6 @@ export async function POST(req: Request) {
     let hybridError: string | null = null;
 
     try {
-      // ✅ NO-BLOCK: ne jamais filtrer par juridiction à la RPC (sinon tu “rates” l’autre régime)
       hybridHits = await hybridSearchRPC({
         query_text: message,
         query_embedding: queryEmbedding,
@@ -1267,11 +1432,12 @@ export async function POST(req: Request) {
     }
 
     // ------------------------------
-    // Passes (priorité selon juridiction attendue) + dedup + ranking
+    // Pass ordering prioritizes expected, but still explores
     // ------------------------------
     let PASS_ORDER: Jurisdiction[] = ["QC", "CA-FED", "OTHER"];
     if (jurisdiction_expected === "CA-FED") PASS_ORDER = ["CA-FED", "QC", "OTHER"];
     else if (jurisdiction_expected === "OTHER") PASS_ORDER = ["OTHER", "QC", "CA-FED"];
+    else if (jurisdiction_expected === "UNKNOWN") PASS_ORDER = ["QC", "CA-FED", "OTHER"];
 
     const debugPasses: any[] = [];
 
@@ -1306,8 +1472,8 @@ export async function POST(req: Request) {
 
       for (let i = 0; i < hybridHits.length; i++) {
         const h = hybridHits[i];
-        const jur = normalizeJurisdiction(h.jurisdiction_norm);
-        const norm: Jurisdiction = jur === "OTHER" ? "OTHER" : jur;
+        const jur0 = normalizeJurisdiction(h.jurisdiction_norm);
+        const norm: Jurisdiction = jur0 === "OTHER" ? "OTHER" : jur0;
         if (norm !== passJur) continue;
 
         const key = dedupKey(h);
@@ -1340,22 +1506,73 @@ export async function POST(req: Request) {
         hybridError,
       });
 
-      // optimisation: si on a assez de bons hits dans la juridiction attendue et que ce n’est pas pénal, on s’arrête
-      if (domain_detected !== "Penal" && passJur === jurisdiction_expected && good >= minGoodHits) break;
+      // optimisation: si lock et assez de bons hits dans la juridiction attendue, on stop (sauf fiscal/pénal)
+      if (gate.lock && passJur === jurisdiction_expected && good >= minGoodHits && domain_detected !== "Fiscal" && domain_detected !== "Penal") break;
     }
 
     // ------------------------------
-    // Sélection top_k (coverage-aware) depuis candidates
+    // Global candidate sort
     // ------------------------------
     const global = [...candidates].sort((a, b) => b.composite - a.composite);
 
+    // ------------------------------
+    // First pass selection (raw) — then strict scope filter (prevents wrong-regime citations)
+    // ------------------------------
+    const rawRows: EnrichedRow[] = [];
+    const pickedRaw = new Set<string>();
+
+    for (let i = 0; i < global.length && rawRows.length < Math.max(top_k * 6, 40); i++) {
+      const r = global[i].row;
+      const k = dedupKey(r);
+      if (pickedRaw.has(k)) continue;
+      pickedRaw.add(k);
+      rawRows.push(r);
+    }
+
+    // Determine preliminary selected jurisdiction:
+    // - if lock => ALWAYS expected
+    // - fiscal: if we have both QC and CA-FED, set UNKNOWN (mixed)
+    const rawSources: Source[] = rawRows.slice(0, Math.min(rawRows.length, 20)).map((r) => ({
+      id: r.id,
+      citation: r.citation,
+      jur: r.jurisdiction_norm,
+      title: r.title,
+      url: r.url_struct,
+      snippet: null,
+    }));
+
+    let jurisdiction_selected_raw = selectJurisdictionFromSources(rawSources, jurisdiction_expected);
+    let jurisdiction_selected: Jurisdiction = gate.lock ? jurisdiction_expected : jurisdiction_selected_raw;
+
+    if (domain_detected === "Fiscal") {
+      const hasQC = rawSources.some((s) => normalizeJurisdiction(s.jur ?? "") === "QC");
+      const hasCA = rawSources.some((s) => normalizeJurisdiction(s.jur ?? "") === "CA-FED");
+      if (hasQC && hasCA) jurisdiction_selected = "UNKNOWN";
+      else if (!gate.lock && jurisdiction_expected !== "UNKNOWN") jurisdiction_selected = jurisdiction_selected_raw;
+      else if (jurisdiction_selected === "UNKNOWN") jurisdiction_selected = "UNKNOWN";
+    }
+
+    // Now apply strict scope filter BEFORE final top_k pick
+    const scopedRows = rawRows.filter((r) =>
+      allowRowByScope({
+        row: r,
+        domain: domain_detected,
+        jurisdiction_expected,
+        jurisdiction_selected,
+        gate,
+      })
+    );
+
+    // If lock and scope filtering leaves nothing, we MUST NOT “fallback” to wrong regime.
+    // Always-answer fallback will handle this safely.
+    // Build finalRows with coverage-aware needs:
     const finalRows: EnrichedRow[] = [];
     const picked = new Set<string>();
 
     const need = {
-      charter: domain_detected === "Penal",
-      crcode: domain_detected === "Penal",
-      clc: domain_detected === "Travail" && jurisdiction_expected === "CA-FED",
+      charter: domain_detected === "Penal" && jurisdiction_selected !== "QC", // mostly for fed penal
+      crcode: domain_detected === "Penal" && jurisdiction_selected !== "QC",
+      clc: domain_detected === "Travail" && jurisdiction_selected === "CA-FED",
     };
 
     const addsNeed = (r: EnrichedRow) => {
@@ -1365,8 +1582,9 @@ export async function POST(req: Request) {
       return false;
     };
 
-    for (let i = 0; i < global.length && finalRows.length < top_k; i++) {
-      const r = global[i].row;
+    // Take needed coverage first
+    for (let i = 0; i < scopedRows.length && finalRows.length < top_k; i++) {
+      const r = scopedRows[i];
       const k = dedupKey(r);
       if (picked.has(k)) continue;
       if (!addsNeed(r)) continue;
@@ -1379,8 +1597,9 @@ export async function POST(req: Request) {
       if (need.clc && isCanadaLabourCodeSource(r)) need.clc = false;
     }
 
-    for (let i = 0; i < global.length && finalRows.length < top_k; i++) {
-      const r = global[i].row;
+    // Fill remaining slots
+    for (let i = 0; i < scopedRows.length && finalRows.length < top_k; i++) {
+      const r = scopedRows[i];
       const k = dedupKey(r);
       if (picked.has(k)) continue;
       picked.add(k);
@@ -1396,13 +1615,14 @@ export async function POST(req: Request) {
       snippet: makeExcerpt(`${r.title ?? ""}\n${r.text ?? ""}`, 900),
     }));
 
-    const jurisdiction_selected = selectJurisdictionFromSources(sources, jurisdiction_expected);
-
+    // ------------------------------
+    // Relevance / coverage / quality
+    // ------------------------------
     const relevance_ok = computeRelevanceOk({
       candidates: global.slice(0, 12).map((x) => ({ row: x.row, composite: x.composite, overlap: x.overlap })),
     });
 
-    const cov = computeCoverage({ domain: domain_detected, message, finalRows, jurisdiction_selected });
+    const cov = computeCoverage({ domain: domain_detected, message, finalRows, jurisdiction_selected, gate });
     const coverage_ok = cov.coverage_ok;
 
     const rag_quality = computeRagQuality({
@@ -1430,8 +1650,10 @@ export async function POST(req: Request) {
       const answer = buildAlwaysAnswerFallback({
         message,
         domain: domain_detected,
-        jurisdiction_expected,
+        gate,
         hybridError,
+        missing_coverage: cov.missing_coverage,
+        ingest_needed: cov.ingest_needed,
       });
 
       await supaPost("/rest/v1/logs", {
@@ -1444,11 +1666,13 @@ export async function POST(req: Request) {
           qa: {
             domain_detected,
             jurisdiction_expected,
-            jurisdiction_selected: jurisdiction_expected,
+            jurisdiction_selected,
+            jurisdiction_lock: gate.lock,
+            pitfall_keyword: gate.pitfall_keyword ?? null,
             rag_quality: 0,
             relevance_ok: false,
             coverage_ok: false,
-            missing_coverage: ["Aucune source pertinente."],
+            missing_coverage: cov.missing_coverage ?? ["Aucune source pertinente."],
             article_confidence: 0,
             refused_reason: null,
             hybrid_error: hybridError,
@@ -1465,7 +1689,8 @@ export async function POST(req: Request) {
           type: "answer",
           domain_detected,
           jurisdiction_expected,
-          jurisdiction_selected: jurisdiction_expected,
+          jurisdiction_selected,
+          jurisdiction_lock: gate.lock,
           rag_quality: 0,
           relevance_ok: false,
           coverage_ok: false,
@@ -1504,7 +1729,10 @@ export async function POST(req: Request) {
       `Question: ${message}`,
       `Domaine détecté: ${domain_detected}`,
       `Juridiction attendue (heuristique): ${jurisdiction_expected}`,
-      `Juridiction sélectionnée (sources dominantes): ${jurisdiction_selected}`,
+      `Juridiction sélectionnée (système): ${jurisdiction_selected}`,
+      `Juridiction verrouillée (lock): ${gate.lock}`,
+      gate.pitfall_keyword ? `Exception/piège détecté: ${gate.pitfall_keyword}` : "",
+      `Hypothèse syndicat (si non mentionné => non syndiqué): union_assumed=${gate.assumptions.union_assumed}`,
       `Signaux QA: relevance_ok=${relevance_ok} ; coverage_ok=${coverage_ok} ; rag_quality=${rag_quality}`,
       hybridError ? `HYBRID_RPC_WARNING: ${hybridError}` : "",
       cov.missing_coverage?.length ? `missing_coverage (pré-calculé):\n- ${cov.missing_coverage.join("\n- ")}` : "missing_coverage (pré-calculé): (aucun)",
@@ -1521,9 +1749,10 @@ export async function POST(req: Request) {
       "",
       "EXIGENCES:",
       "- Réponds en ILAC/IRAC très structurée.",
+      "- Respecte STRICTEMENT la juridiction sélectionnée (surtout si lock=true).",
       "- Réponse graduée: si partiel, partial=true + missing_coverage[] + ingest_needed[].",
-      "- Ne mentionne aucun article/arrêt/lien/test précis hors allowlist (sinon réponds partiellement sans le nommer).",
-      "- N’écris pas de question de clarification bloquante: applique les hypothèses par défaut si un fait manque, et mentionne l’hypothèse.",
+      "- Ne mentionne aucun article/arrêt/lien/test précis hors allowlist.",
+      "- No-block: si un fait manque, applique l’hypothèse commune et mentionne-la (pas de question bloquante).",
       "",
       "INSTRUCTIONS DE SORTIE (JSON strict, uniquement):",
       `{
@@ -1541,8 +1770,7 @@ export async function POST(req: Request) {
 }
 RÈGLES:
 - source_ids_used doit être un sous-ensemble exact de Allowed source_ids.
-- Si tu peux répondre partiellement avec les extraits: type="answer" + partial=true (ne refuse pas par défaut).
-- Évite 'clarify' : si un fait manque, pose l’hypothèse commune et réponds; utilise missing_coverage/ingest_needed pour signaler ce qui manque.`,
+- Évite 'clarify' et 'refuse' : si possible, réponds 'answer' + partial=true.`,
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -1561,18 +1789,21 @@ RÈGLES:
     let parsed = safeJsonParse<ModelJson>(completion.content);
 
     if (parsed && (parsed.type === "refuse" || parsed.type === "clarify") && sources.length > 0 && relevance_ok) {
-      completion = await runModel(
-        "IMPORTANT: No-block. Tu ne dois pas refuser/clarifier si une réponse prudente est possible. Réponds en 'answer' + partial=true et utilise uniquement l’allowlist."
-      );
+      completion = await runModel("IMPORTANT: No-block. Réponds en 'answer' + partial=true si possible, uniquement avec l’allowlist.");
       parsed = safeJsonParse<ModelJson>(completion.content) ?? parsed;
     }
 
+    // ------------------------------
+    // If parse fails => safe fallback (no wrong regime)
+    // ------------------------------
     if (!parsed) {
       const answer = buildAlwaysAnswerFallback({
         message,
         domain: domain_detected,
-        jurisdiction_expected,
+        gate,
         hybridError,
+        missing_coverage: cov.missing_coverage,
+        ingest_needed: cov.ingest_needed,
       });
 
       await supaPost("/rest/v1/logs", {
@@ -1586,6 +1817,7 @@ RÈGLES:
             domain_detected,
             jurisdiction_expected,
             jurisdiction_selected,
+            jurisdiction_lock: gate.lock,
             rag_quality,
             relevance_ok,
             coverage_ok,
@@ -1603,103 +1835,61 @@ RÈGLES:
     }
 
     // ------------------------------
-    // Server-side safety normalization (no-block)
+    // Server-side normalization (ultimate guardrails)
     // ------------------------------
-    parsed.domain = parsed.domain ?? domain_detected;
-    parsed.jurisdiction = parsed.jurisdiction ?? jurisdiction_selected;
+    // ✅ Force domain/jurisdiction to system decision to avoid model drift.
+    parsed.domain = domain_detected;
+    parsed.jurisdiction = jurisdiction_selected;
 
-    if (!parsed.missing_coverage || parsed.missing_coverage.length === 0) parsed.missing_coverage = cov.missing_coverage ?? [];
-    if (!parsed.ingest_needed || parsed.ingest_needed.length === 0) parsed.ingest_needed = cov.ingest_needed ?? [];
-
-    // ✅ Convert "clarify" into a partial answer (no blocking)
+    // ✅ No-block conversions
     if (parsed.type === "clarify") {
       parsed.type = "answer";
       parsed.partial = true;
-      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "No-block: la clarification demandée a été remplacée par une hypothèse par défaut.";
-      parsed.ilac =
-        parsed.ilac ??
-        ({
-          probleme: "La question soulève un enjeu juridique, mais certains faits pouvant influencer la juridiction/règle ne sont pas précisés.",
-          regle: "J’applique la juridiction majoritaire du domaine et les exceptions typiques (et j’indique les hypothèses), en me limitant aux extraits disponibles.",
-          application: "Faute d’information contraire, j’assume les hypothèses communes (ex. non syndiqué en travail) et j’applique les extraits fournis.",
-          conclusion: "Réponse prudente et partielle; fournir les précisions/ingestions pour compléter.",
-        } as any);
+      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "No-block: clarification remplacée par hypothèses par défaut.";
     }
-
-    // ✅ Convert "refuse" into partial answer if sources exist (graduée)
-    if (parsed.type === "refuse" && sources.length > 0) {
+    if (parsed.type === "refuse") {
       parsed.type = "answer";
       parsed.partial = true;
-      parsed.warning = parsed.warning ?? "Réponse partielle (conversion serveur pour éviter un refus total inutile).";
-      parsed.ilac = parsed.ilac ?? {
-        probleme: "Selon les extraits disponibles, la question soulève un enjeu juridique, mais certaines bases précises manquent dans le corpus.",
-        regle: "Je ne peux énoncer que les règles explicitement supportées par les extraits. Pour le reste, l’information n’est pas disponible dans le corpus actuel.",
-        application: "J’applique uniquement ce que les extraits permettent, et j’indique ce qui manque pour compléter l’analyse.",
-        conclusion: "Réponse prudente et partielle; voir 'Couverture manquante' et 'À ingérer' pour compléter.",
-      };
+      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "No-block: refus converti en réponse partielle.";
     }
 
-    const allow = enforceAllowedSourceIds(parsed, allowed_source_ids);
+    // Merge computed missing/ingest if model omitted
+    if (!parsed.missing_coverage || parsed.missing_coverage.length === 0) parsed.missing_coverage = cov.missing_coverage ?? [];
+    if (!parsed.ingest_needed || parsed.ingest_needed.length === 0) parsed.ingest_needed = cov.ingest_needed ?? [];
 
+    // Allowlist enforcement
+    const allow = enforceAllowedSourceIds(parsed, allowed_source_ids);
     let bad_source_ids: string[] = [];
     if (!allow.ok) {
       bad_source_ids = allow.bad;
       parsed.source_ids_used = allow.kept;
-
-      if (!parsed.source_ids_used || parsed.source_ids_used.length === 0) {
-        // no-block: fallback answer
-        const answer = buildAlwaysAnswerFallback({
-          message,
-          domain: domain_detected,
-          jurisdiction_expected,
-          hybridError,
-        });
-
-        await supaPost("/rest/v1/logs", {
-          question: message,
-          profile_slug: profile ?? null,
-          top_ids: finalRows.map((r) => r.id),
-          response: {
-            answer,
-            sources,
-            bad_source_ids: bad_source_ids.length ? bad_source_ids : null,
-            qa: {
-              domain_detected,
-              jurisdiction_expected,
-              jurisdiction_selected,
-              rag_quality,
-              relevance_ok,
-              coverage_ok,
-              missing_coverage: ["Sources hors allowlist détectées et aucune source valide restante."],
-              article_confidence,
-              refused_reason: "allowlist_violation_fallback_answer",
-              hybrid_error: hybridError,
-              redactions_count: 0,
-            },
-          },
-          usage: { mode, top_k, latency_ms: Date.now() - startedAt, openai_usage: completion.usage ?? null, debugPasses },
-          user_id: user.id,
-        }).catch((e) => console.warn("log insert failed:", e));
-
-        return json({
-          answer,
-          sources: [],
-          usage: { type: "answer", domain_detected, jurisdiction_expected, jurisdiction_selected, rag_quality: 0, relevance_ok: false, coverage_ok: false, partial: true, hybrid_error: hybridError },
-        });
-      } else {
-        parsed.partial = true;
-        parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "Certaines sources hors allowlist ont été retirées (réponse partielle).";
-      }
-    }
-
-    if (parsed.type === "answer" && (!parsed.source_ids_used || parsed.source_ids_used.length === 0)) {
-      parsed.source_ids_used = sources.slice(0, Math.min(2, sources.length)).map((s) => s.id);
       parsed.partial = true;
-      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "Aucune source sélectionnée par le modèle; sélection serveur minimale appliquée (réponse partielle).";
+      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "Certaines sources hors allowlist ont été retirées.";
     }
 
+    // If model picked none => pick best in-domain/jurisdiction (NOT random)
+    if (!parsed.source_ids_used || parsed.source_ids_used.length === 0) {
+      parsed.source_ids_used = bestFallbackSourceIds({ sources, domain: domain_detected, jurisdiction: jurisdiction_selected });
+      parsed.partial = true;
+      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "Aucune source sélectionnée par le modèle; sélection serveur améliorée appliquée.";
+    }
+
+    // Ensure ILAC exists
+    if (!parsed.ilac) {
+      parsed.ilac = buildServerIlacFallback({
+        message,
+        domain: domain_detected,
+        jurisdiction: jurisdiction_selected,
+        gate,
+        cov: { missing_coverage: parsed.missing_coverage ?? [], ingest_needed: parsed.ingest_needed ?? [] },
+      });
+      parsed.partial = true;
+      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "ILAC manquant; ILAC serveur appliqué.";
+    }
+
+    // Redact unsupported refs (anti-hallucination)
     let redactions: string[] = [];
-    if (parsed.type === "answer" && parsed.ilac) {
+    {
       const p1 = redactUnsupportedRefs(parsed.ilac.probleme ?? "", allowedCitationsLower);
       const p2 = redactUnsupportedRefs(parsed.ilac.regle ?? "", allowedCitationsLower);
       const p3 = redactUnsupportedRefs(parsed.ilac.application ?? "", allowedCitationsLower);
@@ -1720,13 +1910,32 @@ RÈGLES:
       }
     }
 
+    // ✅ Absolute key: prevent wrong-regime content leaking into answer (Work QC vs Fed)
+    const leak =
+      hasForbiddenRegimeLeak({ text: parsed.ilac.probleme, domain: domain_detected, jurisdiction: jurisdiction_selected }) ||
+      hasForbiddenRegimeLeak({ text: parsed.ilac.regle, domain: domain_detected, jurisdiction: jurisdiction_selected }) ||
+      hasForbiddenRegimeLeak({ text: parsed.ilac.application, domain: domain_detected, jurisdiction: jurisdiction_selected }) ||
+      hasForbiddenRegimeLeak({ text: parsed.ilac.conclusion, domain: domain_detected, jurisdiction: jurisdiction_selected });
+
+    if (leak) {
+      parsed.partial = true;
+      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "Incohérence de régime détectée; correction serveur (pas d’importation d’un autre régime).";
+      parsed.missing_coverage = Array.from(new Set([...(parsed.missing_coverage ?? []), "Incohérence: le texte mentionnait un régime juridique d’une autre juridiction."]));
+      parsed.ingest_needed = Array.from(
+        new Set([...(parsed.ingest_needed ?? []), "Ajouter au corpus les textes du régime applicable (dans la juridiction retenue) afin d’éviter tout recours au mauvais régime."])
+      );
+      parsed.ilac = buildServerIlacFallback({
+        message,
+        domain: domain_detected,
+        jurisdiction: jurisdiction_selected,
+        gate,
+        cov: { missing_coverage: parsed.missing_coverage ?? [], ingest_needed: parsed.ingest_needed ?? [] },
+      });
+    }
+
     if (serverWarning && parsed.type === "answer") {
       parsed.warning = parsed.warning ? `${serverWarning} ${parsed.warning}` : serverWarning;
       if (rag_quality <= 2) parsed.partial = parsed.partial ?? true;
-    }
-
-    if (parsed.type === "refuse" && !parsed.refusal_reason) {
-      parsed.refusal_reason = "Information non disponible dans le corpus actuel (refus déterministe).";
     }
 
     const answer = formatAnswerFromModel(parsed, sources, serverWarning);
@@ -1746,13 +1955,15 @@ RÈGLES:
           domain_detected,
           jurisdiction_expected,
           jurisdiction_selected,
+          jurisdiction_lock: gate.lock,
+          pitfall_keyword: gate.pitfall_keyword ?? null,
           rag_quality,
           relevance_ok,
           coverage_ok,
           missing_coverage: parsed.missing_coverage ?? cov.missing_coverage ?? [],
           had_qc_source,
           article_confidence,
-          refused_reason: parsed.type === "refuse" ? parsed.refusal_reason ?? null : null,
+          refused_reason: null,
           hybrid_error: hybridError,
           redactions_count: redactions.length,
         },
@@ -1775,6 +1986,7 @@ RÈGLES:
         domain_detected,
         jurisdiction_expected,
         jurisdiction_selected,
+        jurisdiction_lock: gate.lock,
         rag_quality,
         relevance_ok,
         coverage_ok,
