@@ -228,10 +228,26 @@ function hasHealthSignals(q: string): boolean {
 
 function hasWorkSignals(q: string): boolean {
   const s = q.toLowerCase();
-  const work = ["congédi", "congedi", "licenci", "renvoi", "emploi", "travail", "harcèlement", "harcelement", "disciplin", "grief", "syndic", "préavis", "preavis"];
-  for (let i = 0; i < work.length; i++) if (s.includes(work[i])) return true;
-  return false;
+
+  // ⚠️ IMPORTANT: pas de "travail" ni "emploi" (trop génériques; "travailleur autonome" ≠ domaine Travail)
+  // On garde des signaux de LITIGE/RELATION DE TRAVAIL.
+  const workStrong = [
+    "congédi", "congedi",
+    "licenci", "mise à pied", "mise a pied",
+    "renvoi", "cessation d'emploi", "cessation d’emploi", "fin d'emploi", "fin d’emploi",
+    "harcèlement", "harcelement",
+    "disciplin", "suspension",
+    "grief", "syndic", "convention collective",
+    "préavis", "preavis",
+    "indemnité", "indemnite",
+    "normes du travail",
+    "employeur", "employé", "employe",
+    "contrat de travail",
+  ];
+
+  return containsAny(s, workStrong);
 }
+
 
 // Hypothèse par défaut: si non mentionné => NON syndiqué
 const UNION_KEYWORDS = ["syndiqué", "syndique", "syndicat", "grief", "convention collective", "accréditation", "accreditation"];
@@ -477,21 +493,46 @@ function jurisdictionGateNoBlock(message: string, domain: Domain): Gate {
 function detectDomain(message: string): Domain {
   const s = message.toLowerCase();
 
+  // 1) Pénal (inclut pénal provincial)
   if (hasPenalSignals(message) || hasQcProvPenalSignals(message)) return "Penal";
-  if (hasWorkSignals(message)) return "Travail";
+
+  // 2) Santé
   if (hasHealthSignals(message)) return "Sante";
 
-  const fiscal = ["revenu québec", "revenu quebec", "agence du revenu", "cotisation", "objection", "appel fiscal", "tps", "tvq", "impôt", "impot", "taxe"];
+  // 3) Fiscal (AVANT Travail)
+  const fiscal = [
+    "revenu québec", "revenu quebec", "agence du revenu",
+    "cotisation", "objection", "appel fiscal",
+    "tps", "tvq", "gst", "hst",
+    "impôt", "impot", "taxe", "déduction", "deduction",
+    "déclar", "declar", "revenu", "revenus", "factur", "facturation"
+  ];
+
+  // Bonus : "travailleur autonome" est très souvent une question FISCALE,
+  // même si l’utilisateur n’a pas écrit "impôt/taxes" explicitement.
+  if (
+    s.includes("travailleur autonome") ||
+    (s.includes("autonome") && containsAny(s, ["revenu", "revenus", "déclar", "declar", "taxe", "tps", "tvq", "impôt", "impot", "factur"]))
+  ) {
+    return "Fiscal";
+  }
+
   if (containsAny(s, fiscal)) return "Fiscal";
 
+  // 4) Travail (litige/relations de travail)
+  if (hasWorkSignals(message)) return "Travail";
+
+  // 5) Admin
   const admin = ["taq", "cai", "commission d'accès", "commission d’acces", "contrôle judiciaire", "controle judiciaire", "tribunal administratif", "permis", "zonage"];
   if (containsAny(s, admin)) return "Admin";
 
+  // 6) Civil
   const civil = ["responsabilité", "responsabilite", "faute", "préjudice", "prejudice", "dommage", "contrat", "obligation", "bail", "vice caché", "vice cache", "prescription"];
   if (containsAny(s, civil)) return "Civil";
 
   return "Inconnu";
 }
+
 
 // ------------------------------
 // Keyword extraction + expansion
