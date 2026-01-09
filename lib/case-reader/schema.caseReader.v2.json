@@ -1,0 +1,323 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://droitis.app/schemas/case-reader-v2.json",
+  "title": "Droitis Case Reader Output (Phase 4C) - v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "output_mode"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["answer", "clarify"]
+    },
+    "output_mode": {
+      "type": "string",
+      "enum": ["fiche", "analyse_longue"]
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": { "type": "string", "const": "4C.v2" },
+        "language": { "type": "string", "enum": ["fr", "en"], "default": "fr" },
+        "institution_slug": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "course_slug": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "source_provided_by_user": { "type": "boolean", "default": true }
+      }
+    },
+
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jurisdiction", "tribunal", "date"],
+      "properties": {
+        "jurisdiction": {
+          "type": "string",
+          "enum": ["QC", "CA-FED", "OTHER", "UNKNOWN"]
+        },
+        "tribunal": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "date": {
+          "type": "string",
+          "description": "ISO date YYYY-MM-DD when known; otherwise 'UNKNOWN'.",
+          "pattern": "^(\\d{4}-\\d{2}-\\d{2}|UNKNOWN)$"
+        },
+        "case_name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "neutral_citation": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "docket": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "notes": { "type": "string", "maxLength": 800 }
+      }
+    },
+
+    "facts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "key_facts"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "key_facts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["fact", "importance", "anchor_refs"],
+            "properties": {
+              "fact": { "type": "string", "minLength": 1, "maxLength": 400 },
+              "importance": {
+                "type": "string",
+                "enum": ["central", "important", "contextuel"]
+              },
+              "why_it_matters": { "type": "string", "maxLength": 500 },
+              "anchor_refs": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": { "type": "string", "minLength": 1, "maxLength": 36 }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "issues": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+    },
+
+    "rule_test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule_summary", "test_steps", "anchors_required_notice"],
+      "properties": {
+        "rule_summary": { "type": "string", "minLength": 1, "maxLength": 1600 },
+        "test_steps": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["step_label", "description", "anchor_refs"],
+            "properties": {
+              "step_label": { "type": "string", "minLength": 1, "maxLength": 60 },
+              "description": { "type": "string", "minLength": 1, "maxLength": 700 },
+              "anchor_refs": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": { "type": "string", "minLength": 1, "maxLength": 36 }
+              }
+            }
+          }
+        },
+        "cited_articles": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["instrument", "article", "how_used", "anchor_refs"],
+            "properties": {
+              "instrument": { "type": "string", "minLength": 1, "maxLength": 120 },
+              "article": { "type": "string", "minLength": 1, "maxLength": 40 },
+              "how_used": {
+                "type": "string",
+                "enum": ["cited_by_court", "provided_by_user", "from_allowed_sources"]
+              },
+              "anchor_refs": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": { "type": "string", "minLength": 1, "maxLength": 36 }
+              }
+            }
+          }
+        },
+        "anchors_required_notice": {
+          "type": "string",
+          "const": "Toutes les règles/tests doivent être ancrés dans le texte fourni (ou sources autorisées)."
+        }
+      }
+    },
+
+    "application_reasoning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["structured_application", "ratio", "obiter"],
+      "properties": {
+        "structured_application": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["step_label", "reasoning", "conclusion", "anchor_refs"],
+            "properties": {
+              "step_label": { "type": "string", "minLength": 1, "maxLength": 60 },
+              "facts_used": {
+                "type": "array",
+                "maxItems": 8,
+                "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+              },
+              "reasoning": { "type": "string", "minLength": 1, "maxLength": 1800 },
+              "conclusion": { "type": "string", "minLength": 1, "maxLength": 700 },
+              "anchor_refs": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 6,
+                "items": { "type": "string", "minLength": 1, "maxLength": 36 }
+              }
+            }
+          }
+        },
+        "ratio": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["point", "anchor_refs", "confidence"],
+            "properties": {
+              "point": { "type": "string", "minLength": 1, "maxLength": 500 },
+              "anchor_refs": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": { "type": "string", "minLength": 1, "maxLength": 36 }
+              },
+              "confidence": { "type": "string", "enum": ["forte", "moyenne", "faible"] }
+            }
+          }
+        },
+        "obiter": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["point", "anchor_refs", "confidence"],
+            "properties": {
+              "point": { "type": "string", "minLength": 1, "maxLength": 500 },
+              "anchor_refs": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": { "type": "string", "minLength": 1, "maxLength": 36 }
+              },
+              "confidence": { "type": "string", "enum": ["forte", "moyenne", "faible"] }
+            }
+          }
+        }
+      }
+    },
+
+    "scope_for_course": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exam_triggers", "key_concepts", "how_to_use_in_exam", "limits"],
+      "properties": {
+        "exam_triggers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": { "type": "string", "minLength": 1, "maxLength": 220 }
+        },
+        "key_concepts": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 15,
+          "items": { "type": "string", "minLength": 1, "maxLength": 120 }
+        },
+        "how_to_use_in_exam": { "type": "string", "minLength": 1, "maxLength": 1400 },
+        "limits": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 10,
+          "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+        }
+      }
+    },
+
+    "takeaways": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 12,
+      "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+    },
+
+    "anchors": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 80,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "anchor_type", "location", "evidence_snippet", "confidence"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 36 },
+          "anchor_type": {
+            "type": "string",
+            "enum": ["regle", "test", "application", "conclusion", "obiter", "faits"]
+          },
+          "location": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind"],
+            "properties": {
+              "kind": { "type": "string", "enum": ["para", "page", "unknown"] },
+              "start": { "type": "integer", "minimum": 0, "maximum": 20000 },
+              "end": { "type": "integer", "minimum": 0, "maximum": 20000 },
+              "note": { "type": "string", "maxLength": 120 }
+            }
+          },
+          "evidence_snippet": { "type": "string", "minLength": 1, "maxLength": 280 },
+          "confidence": { "type": "string", "enum": ["forte", "moyenne", "faible"] }
+        }
+      }
+    },
+
+    "warnings": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 1, "maxLength": 220 }
+    },
+
+    "clarification_questions": {
+      "type": "array",
+      "maxItems": 3,
+      "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+    }
+  },
+
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "clarify" } }, "required": ["type"] },
+      "then": {
+        "required": ["clarification_questions"],
+        "not": { "required": ["facts", "issues", "rule_test", "application_reasoning"] }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "answer" } }, "required": ["type"] },
+      "then": {
+        "required": [
+          "context",
+          "facts",
+          "issues",
+          "rule_test",
+          "application_reasoning",
+          "scope_for_course",
+          "takeaways",
+          "anchors"
+        ]
+      }
+    }
+  ]
+}
