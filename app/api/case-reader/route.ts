@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
-import Ajv from "ajv";
+import Ajv2020 from "ajv/dist/2020";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,7 +25,7 @@ const schemaPath = path.join(process.cwd(), "schemas", "case-reader-v2.schema.js
 const schema = JSON.parse(fs.readFileSync(schemaPath, "utf-8"));
 
 // --- Ajv validator (ceinture + bretelles) ---
-const ajv = new Ajv({ allErrors: true, strict: false });
+const ajv = new Ajv2020({ allErrors: true, strict: false });
 const validate = ajv.compile(schema);
 
 export async function OPTIONS() {
