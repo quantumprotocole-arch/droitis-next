@@ -64,6 +64,62 @@ export async function POST(req: Request) {
     const children: Paragraph[] = [];
 
     children.push(h("Droitis — Fiche (Case Reader)", HeadingLevel.TITLE));
+        // =========================
+    // BLOC EXAM-FIRST (EN TÊTE)
+    // =========================
+
+    // 0) Dispositions importantes
+    children.push(h("Dispositions importantes (à citer)", HeadingLevel.HEADING_1));
+    for (const r of safeArray(out.rule_test?.rules)) {
+      const ruleText = String(r?.rule ?? "").trim();
+      if (!ruleText) continue;
+      const refs = safeArray<string>(r?.anchor_refs).filter(Boolean);
+      const suffix = refs.length ? ` (ancres: ${refs.join(", ")})` : "";
+      children.push(bullet(ruleText + suffix));
+    }
+
+    // 0b) Pièges à éviter
+    children.push(h("Pièges à éviter", HeadingLevel.HEADING_1));
+    for (const x of safeArray<string>(out.scope_for_course?.exam_spotting_box?.pitfalls)) {
+      const t = String(x ?? "").trim();
+      if (t) children.push(bullet(t));
+    }
+
+    // 0c) Quand vérifier la décision (heuristique simple)
+    const anchors = safeArray(out.anchors);
+    const lowConfidenceRatio =
+      anchors.length > 0
+        ? anchors.filter((a: any) => String(a?.confidence ?? "").toLowerCase() === "faible").length /
+          anchors.length
+        : 0;
+
+    const manyUnknown =
+      JSON.stringify(out.context ?? {}).includes("UNKNOWN") ||
+      JSON.stringify(out.facts ?? {}).includes("UNKNOWN");
+
+    const shouldVerify =
+      String(out.context?.neutral_citation ?? "UNKNOWN") === "UNKNOWN" ||
+      manyUnknown ||
+      lowConfidenceRatio >= 0.5;
+
+    children.push(h("Quand aller vérifier la décision", HeadingLevel.HEADING_1));
+    children.push(
+      p(
+        shouldVerify
+          ? "Vérifie la décision complète (citation, tribunal/date, paragraphes) si tu t’en sers en examen/travail ou si un point est contestable. Ici, certaines infos clés semblent manquantes ou peu sûres."
+          : "Vérification recommandée seulement si tu as besoin d’une citation exacte, ou d’un passage précis."
+      )
+    );
+
+    // 0d) Définitions rapides (si le modèle les fournit dans takeaways sous forme 'Définition — ...')
+    const defs = safeArray<string>(out.takeaways).filter((t) =>
+      String(t).toLowerCase().startsWith("définition")
+    );
+    if (defs.length) {
+      children.push(h("Définitions rapides (vulgarisées)", HeadingLevel.HEADING_1));
+      for (const d of defs) children.push(bullet(String(d)));
+    }
+
 
     children.push(h("1. Contexte", HeadingLevel.HEADING_1));
     children.push(p(JSON.stringify(out.context ?? {}, null, 2)));

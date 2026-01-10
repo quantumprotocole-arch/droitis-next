@@ -36,7 +36,7 @@ export default function CaseReaderPage() {
   const [outputMode, setOutputMode] = useState<"fiche" | "analyse_longue">("analyse_longue");
   const [institutionSlug, setInstitutionSlug] = useState("udes");
   const [courseSlug, setCourseSlug] = useState("obligations-1");
-
+  const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [status, setStatus] = useState<number | null>(null);
@@ -47,6 +47,28 @@ export default function CaseReaderPage() {
     return data && data.type === "answer";
   }, [data]);
 
+async function onExtractFile() {
+  if (!file) return;
+  setLoading(true);
+  setError(null);
+
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+
+    const res = await fetch("/api/case-reader/extract", { method: "POST", body: fd });
+    const text = await res.text();
+    const json = JSON.parse(text);
+
+    if (!res.ok) throw new Error(json?.error ?? `Extraction error (${res.status})`);
+
+    setCaseText(json.extracted_text ?? "");
+  } catch (e: any) {
+    setError(String(e?.message ?? e));
+  } finally {
+    setLoading(false);
+  }
+}
   async function onGenerate() {
     setLoading(true);
     setError(null);
@@ -161,6 +183,16 @@ export default function CaseReaderPage() {
         {status !== null && <span style={{ opacity: 0.8 }}>STATUS: {status}</span>}
         {error && <span style={{ color: "crimson" }}>{error}</span>}
       </div>
+<div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+  <input
+    type="file"
+    accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+  />
+  <button onClick={onExtractFile} disabled={!file || loading}>
+    {loading ? "Extraction..." : "Extraire le texte"}
+  </button>
+</div>
 
       <textarea
         value={caseText}
