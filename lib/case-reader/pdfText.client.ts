@@ -1,51 +1,41 @@
 // lib/case-reader/pdfText.client.ts
-// Client-only PDF text extraction with robust imports across pdfjs-dist versions.
-// We disable worker to avoid Next/Vercel Terser issues with pdf.worker.mjs.
+// Client-only: PDF text extraction using pdfjs-dist with NO worker.
 
-type PdfJsModule = {
-  getDocument?: (args: any) => any;
-};
+import * as pdfjsDist from "pdfjs-dist";
 
-async function loadPdfJs(): Promise<PdfJsModule> {
-  // Try the most common entrypoints across versions/bundlers.
-  // Order matters: we prefer stable entrypoints first.
-  const candidates = [
-    "pdfjs-dist", // official entry
-    "pdfjs-dist/legacy/build/pdf", // older legacy path (some versions)
-    "pdfjs-dist/legacy/build/pdf.mjs", // ESM legacy path (some versions)
-    "pdfjs-dist/build/pdf", // older path
-    "pdfjs-dist/build/pdf.mjs", // ESM path
-  ] as const;
+type PdfJsAny = any;
 
-  let lastErr: any = null;
+function getPdfJs(): PdfJsAny {
+  // pdfjs-dist peut exporter soit en named exports, soit via default selon le bundler
+  const m: PdfJsAny = (pdfjsDist as any);
+  const pdfjs: PdfJsAny = m?.getDocument ? m : (m?.default ?? m);
 
-  for (const spec of candidates) {
-    try {
-      const mod: any = await import(/* webpackIgnore: true */ spec);
-      const m: any = mod?.default ?? mod;
-      if (m?.getDocument) return m as PdfJsModule;
-      // Some builds export getDocument at top-level even if default exists
-      if (mod?.getDocument) return mod as PdfJsModule;
-    } catch (e) {
-      lastErr = e;
-    }
+  if (!pdfjs?.getDocument) {
+    // Message clair pour debug
+    const keys = Object.keys(pdfjs ?? {});
+    throw new Error(
+      "pdfjs-dist chargé mais getDocument est introuvable. " +
+        "Exports disponibles: " +
+        keys.slice(0, 30).join(", ")
+    );
   }
 
-  throw new Error(
-    "Impossible de charger pdfjs-dist (getDocument introuvable). " +
-      "Vérifie que 'pdfjs-dist' est bien installé. " +
-      (lastErr ? `Dernière erreur: ${String(lastErr?.message ?? lastErr)}` : "")
-  );
+  // On évite tout worker (important pour Next/Vercel)
+  if (pdfjs?.GlobalWorkerOptions) {
+    // on met une valeur vide, et surtout on passe disableWorker: true plus bas
+    pdfjs.GlobalWorkerOptions.workerSrc = "";
+  }
+
+  return pdfjs;
 }
 
 export async function extractPdfTextFromFile(file: File): Promise<string> {
-  const pdfjs = await loadPdfJs();
-  if (!pdfjs.getDocument) throw new Error("pdfjs-dist: getDocument introuvable.");
+  const pdfjs = getPdfJs();
 
   const ab = await file.arrayBuffer();
   const data = new Uint8Array(ab);
 
-  // ✅ IMPORTANT: disableWorker avoids bundling pdf.worker.mjs => fixes Terser import.meta/export build failure
+  // ✅ IMPORTANT: disableWorker évite d’embarquer/charger pdf.worker.mjs
   const loadingTask = pdfjs.getDocument({ data, disableWorker: true });
   const pdf = await loadingTask.promise;
 

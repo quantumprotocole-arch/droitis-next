@@ -72,18 +72,12 @@ export async function POST(req: Request) {
 
     let text = "";
 
-    if (isPdf) {
-      text = await parsePdfBuffer(buf);
-    } else if (isDocx) {
-      const out = await mammoth.extractRawText({ buffer: buf });
-      text = out?.value ?? "";
-    } else {
-      return NextResponse.json(
-        { error: "Unsupported file type (use .pdf or .docx)", mime, name },
-        { status: 415, headers: CORS_HEADERS }
-      );
-    }
-
+   if (isPdf) {
+  return NextResponse.json(
+    { error: "PDF: extraction côté navigateur uniquement (upload un PDF texte ou copie-colle le texte)." },
+    { status: 415, headers: CORS_HEADERS }
+  );
+}
     text = normalizeText(text);
 
     if (!text) {
