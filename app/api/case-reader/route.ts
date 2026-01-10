@@ -307,7 +307,7 @@ export async function POST(req: Request) {
       decision_date_hint: body.decision_date_hint
     };
 
-    // 1) Primary call
+    // -------- 1) Primary call --------
     const r1 = await callOpenAIResponses(buildPrimaryPayload(developer, userPayload));
     if (!r1.ok) {
       return NextResponse.json(
@@ -324,12 +324,18 @@ export async function POST(req: Request) {
       );
     }
 
-    // Parse
+    // -------- 2) Parse primary JSON --------
     let parsed: any;
+    let parsedOk = false;
     try {
       parsed = JSON.parse(raw1);
+      parsedOk = true;
     } catch {
-      // 2) Repair retry (parse fail)
+      parsedOk = false;
+    }
+
+    // -------- 3) If parse failed -> repair once --------
+    if (!parsedOk) {
       const r2 = await callOpenAIResponses(buildRepairPayload(developer, raw1, { parse: "failed" }));
       if (!r2.ok) {
         return NextResponse.json(
@@ -337,15 +343,6 @@ export async function POST(req: Request) {
           { status: 502, headers: CORS_HEADERS }
         );
       }
-          // Si le modèle répond "clarify", on renvoie une version MINIMALE
-    // (sinon Ajv peut échouer sur des champs optionnels contraints, ex anchors.id)
-    if (parsed?.type === "clarify") {
-      const minimal = normalizeClarify(parsed);
-      return NextResponse.json(minimal, { status: 200, headers: CORS_HEADERS });
-    }
-
-    // Sinon (answer), on assainit les anchor IDs pour éviter un échec pattern Ajv
-    sanitizeAnchorIds(parsed);
 
       const raw2 = extractOutputText(r2.json);
       if (!raw2) {
@@ -354,6 +351,7 @@ export async function POST(req: Request) {
           { status: 502, headers: CORS_HEADERS }
         );
       }
+
       try {
         parsed = JSON.parse(raw2);
       } catch {
@@ -364,6 +362,15 @@ export async function POST(req: Request) {
       }
     }
 
+    // ✅ IMPORTANT : normalisation clarify AVANT tout le reste
+    if (parsed?.type === "clarify") {
+      const minimal = normalizeClarify(parsed);
+      return NextResponse.json(minimal, { status: 200, headers: CORS_HEADERS });
+    }
+
+    // Sinon, c’est une réponse: on assainit anchors ids
+    sanitizeAnchorIds(parsed);
+
     // Anti-URL server side
     const urlCheck = containsForbiddenUrlLikeStrings(parsed);
     if (urlCheck.found) {
@@ -373,59 +380,67 @@ export async function POST(req: Request) {
       );
     }
 
-    // Ajv validation (canonical)
+    // -------- 4) Ajv validation --------
     let ok = validate(parsed) as boolean;
-    if (!ok) {
-      // 3) Repair retry (schema fail)
-      const r2 = await callOpenAIResponses(
-        buildRepairPayload(developer, JSON.stringify(parsed), validate.errors)
-      );
-
-      if (!r2.ok) {
-        return NextResponse.json(
-          { error: "OpenAI repair error", status: r2.status, resp: r2.json, errors: validate.errors },
-          { status: 502, headers: CORS_HEADERS }
-        );
-      }
-
-      const raw2 = extractOutputText(r2.json);
-      if (!raw2) {
-        return NextResponse.json(
-          { error: "Empty output_text from repair", resp: r2.json },
-          { status: 502, headers: CORS_HEADERS }
-        );
-      }
-
-      let parsed2: any;
-      try {
-        parsed2 = JSON.parse(raw2);
-      } catch {
-        return NextResponse.json(
-          { error: "Repair output not valid JSON", raw: raw2, errors: validate.errors },
-          { status: 502, headers: CORS_HEADERS }
-        );
-      }
-
-      const urlCheck2 = containsForbiddenUrlLikeStrings(parsed2);
-      if (urlCheck2.found) {
-        return NextResponse.json(
-          { error: "Forbidden URL-like content detected (repair)", sample: urlCheck2.sample },
-          { status: 502, headers: CORS_HEADERS }
-        );
-      }
-
-      ok = validate(parsed2) as boolean;
-      if (!ok) {
-        return NextResponse.json(
-          { error: "Schema validation failed (after repair)", errors: validate.errors, parsed: parsed2 },
-          { status: 502, headers: CORS_HEADERS }
-        );
-      }
-
-      return NextResponse.json(parsed2, { status: 200, headers: CORS_HEADERS });
+    if (ok) {
+      return NextResponse.json(parsed, { status: 200, headers: CORS_HEADERS });
     }
 
-    return NextResponse.json(parsed, { status: 200, headers: CORS_HEADERS });
+    // -------- 5) Repair once if schema fails --------
+    const r3 = await callOpenAIResponses(
+      buildRepairPayload(developer, JSON.stringify(parsed), validate.errors)
+    );
+
+    if (!r3.ok) {
+      return NextResponse.json(
+        { error: "OpenAI repair error", status: r3.status, resp: r3.json, errors: validate.errors },
+        { status: 502, headers: CORS_HEADERS }
+      );
+    }
+
+    const raw3 = extractOutputText(r3.json);
+    if (!raw3) {
+      return NextResponse.json(
+        { error: "Empty output_text from repair", resp: r3.json },
+        { status: 502, headers: CORS_HEADERS }
+      );
+    }
+
+    let parsed3: any;
+    try {
+      parsed3 = JSON.parse(raw3);
+    } catch {
+      return NextResponse.json(
+        { error: "Repair output not valid JSON", raw: raw3, errors: validate.errors },
+        { status: 502, headers: CORS_HEADERS }
+      );
+    }
+
+    // ✅ Normalisation clarify (au cas où le repair décide de basculer en clarify)
+    if (parsed3?.type === "clarify") {
+      const minimal = normalizeClarify(parsed3);
+      return NextResponse.json(minimal, { status: 200, headers: CORS_HEADERS });
+    }
+
+    sanitizeAnchorIds(parsed3);
+
+    const urlCheck3 = containsForbiddenUrlLikeStrings(parsed3);
+    if (urlCheck3.found) {
+      return NextResponse.json(
+        { error: "Forbidden URL-like content detected (repair)", sample: urlCheck3.sample },
+        { status: 502, headers: CORS_HEADERS }
+      );
+    }
+
+    ok = validate(parsed3) as boolean;
+    if (!ok) {
+      return NextResponse.json(
+        { error: "Schema validation failed (after repair)", errors: validate.errors, parsed: parsed3 },
+        { status: 502, headers: CORS_HEADERS }
+      );
+    }
+
+    return NextResponse.json(parsed3, { status: 200, headers: CORS_HEADERS });
   } catch (e: any) {
     const msg = e?.name === "AbortError" ? "OpenAI timeout" : String(e?.message ?? e);
     console.error(e);
