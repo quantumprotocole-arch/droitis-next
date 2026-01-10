@@ -26,14 +26,20 @@ function normalizeText(s: string) {
 }
 
 async function parsePdfBuffer(buf: Buffer): Promise<string> {
-  // ✅ Robust: pdf-parse peut être CJS ou ESM selon le bundler.
   const mod: any = await import("pdf-parse");
-  const pdfParseFn = mod?.default ?? mod; // prend default si présent, sinon module direct
-  if (typeof pdfParseFn !== "function") {
-    throw new Error("pdf-parse export is not a function (ESM/CJS mismatch).");
+  const pdfParseFn = mod?.default ?? mod;
+  if (typeof pdfParseFn !== "function") throw new Error("pdf-parse export is not a function.");
+
+  try {
+    const out = await pdfParseFn(buf);
+    return out?.text ?? "";
+  } catch (e: any) {
+    const msg = String(e?.message ?? e);
+    if (msg.includes("@napi-rs/canvas")) {
+      throw new Error("PDF extraction requires @napi-rs/canvas on server. Install it and externalize it in next.config.");
+    }
+    throw e;
   }
-  const out = await pdfParseFn(buf);
-  return out?.text ?? "";
 }
 
 export async function POST(req: Request) {
