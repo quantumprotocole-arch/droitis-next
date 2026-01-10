@@ -12,6 +12,7 @@
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.89.0",
     "ajv": "^8.17.1",
+    "docx": "^9.5.1",
     "next": "14.2.5",
     "openai": "^6.15.0",
     "react": "18.3.1",
