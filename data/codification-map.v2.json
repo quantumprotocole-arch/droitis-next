@@ -1,0 +1,1354 @@
+{
+  "version": "v2",
+  "generated_from": "Droitis_Codification_Jurisprudence_Map_v2.csv",
+  "records": [
+    {
+      "domain": "Consommation (LPC)",
+      "theme": "Garantie légale / vice caché / manufacturier",
+      "decision": "General Motors Products of Canada c. Kravitz",
+      "citation": "[1979] 1 RCS 790",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 1442, 1726-1730; LPC art. 37-38, 53-54",
+      "principle": "Opposabilité de la garantie légale au manufacturier / acquéreur subséquent (transposition en droit actuel)",
+      "recommended_mention": "Dans la fiche, ajouter un encadré «Codification» : principe Kravitz → CCQ 1442 & 1730 (garantie du manufacturier) + LPC 37-38/53-54 (garantie/recours consommateur).",
+      "match_patterns": [
+        "General Motors Products of Canada c. Kravitz",
+        "General Motors Products of Canada c Kravitz",
+        "[1979] 1 RCS 790"
+      ],
+      "match_patterns_norm": [
+        "general motors products of canada c. kravitz",
+        "general motors products of canada c kravitz",
+        "[1979] 1 rcs 790"
+      ]
+    },
+    {
+      "domain": "Consommation (LPC)",
+      "theme": "Arbitrage / contrats d’adhésion / recours collectif",
+      "decision": "Dell Computer Corp. c. Union des consommateurs",
+      "citation": "2007 CSC 34",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "LPC art. 11.1; C.p.c. (recours collectif) arts 571-575 (aujourd'hui); C.c.Q. art. 1437 (clause abusive) (souvent discuté)",
+      "principle": "Arbitrage vs recours collectif; portée de l’interdiction/encadrement des clauses d’arbitrage en matière de consommation",
+      "recommended_mention": "Dans la fiche, mentionner «Cadre LPC 11.1» et rappeler l'interface arbitrage/recours collectif (C.p.c.).",
+      "match_patterns": [
+        "Dell Computer Corp. c. Union des consommateurs",
+        "Dell Computer Corp. c Union des consommateurs",
+        "2007 CSC 34"
+      ],
+      "match_patterns_norm": [
+        "dell computer corp. c. union des consommateurs",
+        "dell computer corp. c union des consommateurs",
+        "2007 csc 34"
+      ]
+    },
+    {
+      "domain": "Consommation (LPC)",
+      "theme": "Arbitrage / recours collectif / télécom",
+      "decision": "Rogers Sans-fil inc. c. Muroff",
+      "citation": "2007 CSC 35",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "LPC (contrats de consommation; renvoi discuté); C.p.c. (arbitrage/compétence) + jurisprudence Dell",
+      "principle": "Compétence arbitrale et contrôle judiciaire; articulation avec protections consommateur",
+      "recommended_mention": "Dans la fiche, lier Muroff à Dell pour le «test de renvoi à l’arbitrage» en contexte consommateur.",
+      "match_patterns": [
+        "Rogers Sans-fil inc. c. Muroff",
+        "Rogers Sans-fil inc. c Muroff",
+        "2007 CSC 35"
+      ],
+      "match_patterns_norm": [
+        "rogers sans-fil inc. c. muroff",
+        "rogers sans-fil inc. c muroff",
+        "2007 csc 35"
+      ]
+    },
+    {
+      "domain": "Consommation (LPC)",
+      "theme": "Pratiques interdites / impression générale",
+      "decision": "Richard c. Time Inc.",
+      "citation": "2012 CSC 8",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "LPC art. 218-219, 228, 272",
+      "principle": "Test de l’«impression générale» et consommateur crédule et inexpérimenté; dommages punitifs/recours",
+      "recommended_mention": "Dans la fiche, ajouter «Codification/Ancrage»: LPC 218-219 (représentation trompeuse) + 272 (remèdes).",
+      "match_patterns": [
+        "Richard c. Time Inc.",
+        "Richard c Time Inc.",
+        "2012 CSC 8"
+      ],
+      "match_patterns_norm": [
+        "richard c. time inc.",
+        "richard c time inc.",
+        "2012 csc 8"
+      ]
+    },
+    {
+      "domain": "Consommation (LPC)",
+      "theme": "Frais de conversion / divulgation / cartes de crédit",
+      "decision": "Banque de Montréal c. Marcotte",
+      "citation": "2014 CSC 55",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "LPC art. 12, 16-17, 219, 272 (selon le volet); interaction avec lois fédérales (ex. lettres de change)",
+      "principle": "Divulgation de frais; prépondérance fédérale vs LPC; restitution et punitifs",
+      "recommended_mention": "Dans la fiche, afficher «Juridiction MIXTE» si conflit de normes; rappeler LPC comme norme de protection et analyser la prépondérance.",
+      "match_patterns": [
+        "Banque de Montreal c. Marcotte",
+        "Banque de Montréal c. Marcotte",
+        "Banque de Montreal c Marcotte",
+        "Banque de Montréal c Marcotte",
+        "2014 CSC 55"
+      ],
+      "match_patterns_norm": [
+        "banque de montreal c. marcotte",
+        "banque de montreal c. marcotte",
+        "banque de montreal c marcotte",
+        "banque de montreal c marcotte",
+        "2014 csc 55"
+      ]
+    },
+    {
+      "domain": "Consommation (LPC)",
+      "theme": "Frais de conversion / cartes de crédit",
+      "decision": "Banque Amex du Canada c. Adams",
+      "citation": "2014 CSC 56",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "LPC art. 12, 219, 272",
+      "principle": "Application des exigences de divulgation (frais) et seuil des dommages punitifs",
+      "recommended_mention": "Dans la fiche, renvoyer à l’arrêt BMO (Marcotte) comme «arrêt compagnon» + LPC 12/272.",
+      "match_patterns": [
+        "Banque Amex du Canada c. Adams",
+        "Banque Amex du Canada c Adams",
+        "2014 CSC 56"
+      ],
+      "match_patterns_norm": [
+        "banque amex du canada c. adams",
+        "banque amex du canada c adams",
+        "2014 csc 56"
+      ]
+    },
+    {
+      "domain": "Consommation (LPC)",
+      "theme": "Frais de conversion / coopératives financières",
+      "decision": "Marcotte c. Fédération des caisses Desjardins du Québec",
+      "citation": "2014 CSC 57",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "LPC art. 12, 219, 272",
+      "principle": "Même logique que Marcotte/Adams; application à Desjardins",
+      "recommended_mention": "Dans la fiche, rappeler que c’est une trilogie: BMO 55 / Amex 56 / Desjardins 57.",
+      "match_patterns": [
+        "Marcotte c. Federation des caisses Desjardins du Quebec",
+        "Marcotte c. Fédération des caisses Desjardins du Québec",
+        "Marcotte c Federation des caisses Desjardins du Quebec",
+        "Marcotte c Fédération des caisses Desjardins du Québec",
+        "2014 CSC 57"
+      ],
+      "match_patterns_norm": [
+        "marcotte c. federation des caisses desjardins du quebec",
+        "marcotte c. federation des caisses desjardins du quebec",
+        "marcotte c federation des caisses desjardins du quebec",
+        "marcotte c federation des caisses desjardins du quebec",
+        "2014 csc 57"
+      ]
+    },
+    {
+      "domain": "Consommation (LPC)",
+      "theme": "Recours collectif / marché / complot",
+      "decision": "Infineon Technologies AG c. Option consommateurs",
+      "citation": "2013 CSC 59",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "C.p.c. art. 575 (autorisation) (ancien 1003); règles de rattachement en droit international privé (souvent discutées)",
+      "principle": "Seuil d’autorisation d’un recours collectif; approche souple du «cause défendable»",
+      "recommended_mention": "Dans la fiche, encadré «Codification»: CPC 575 (critères) — l'arrêt sert de guide d'interprétation pour l’article.",
+      "match_patterns": [
+        "Infineon Technologies AG c. Option consommateurs",
+        "Infineon Technologies AG c Option consommateurs",
+        "2013 CSC 59"
+      ],
+      "match_patterns_norm": [
+        "infineon technologies ag c. option consommateurs",
+        "infineon technologies ag c option consommateurs",
+        "2013 csc 59"
+      ]
+    },
+    {
+      "domain": "Consommation (LPC)",
+      "theme": "Attribution de compétence / recours collectif",
+      "decision": "Desjardins Cabinet de services financiers inc. c. Asselin",
+      "citation": "2020 CSC 30",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "C.p.c. art. 575 (autorisation); règles de prescription/gestion du groupe selon le cas",
+      "principle": "Autorisation: analyse de la cause défendable et preuve minimale; gestion du recours",
+      "recommended_mention": "Dans la fiche, lier à CPC 575 et préciser le standard de preuve à l'étape autorisation.",
+      "match_patterns": [
+        "Desjardins Cabinet de services financiers inc. c. Asselin",
+        "Desjardins Cabinet de services financiers inc. c Asselin",
+        "2020 CSC 30"
+      ],
+      "match_patterns_norm": [
+        "desjardins cabinet de services financiers inc. c. asselin",
+        "desjardins cabinet de services financiers inc. c asselin",
+        "2020 csc 30"
+      ]
+    },
+    {
+      "domain": "Consommation (contrats standard / forum)",
+      "theme": "Clauses externes / accès à la justice (numérique)",
+      "decision": "Douez c. Facebook, Inc.",
+      "citation": "2017 CSC 33",
+      "tribunal": "CSC",
+      "jurisdiction": "CA (BC) / principes généraux applicables",
+      "codification_articles": "Forum selection clause; test Pompey; notions d’iniquité/abus en contrats standard (comparables en QC: C.c.Q. art. 1437; DI privé: art. 3148)",
+      "principle": "Opposabilité d’une clause d’élection de for; contrôle accru en contrats de consommation",
+      "recommended_mention": "Dans la fiche, créer bloc «Attention — clause d’élection de for»; en QC, pointer aussi vers C.c.Q. 1437 (clause abusive) et 3148 (compétence).",
+      "match_patterns": [
+        "Douez c. Facebook, Inc.",
+        "Douez c Facebook, Inc.",
+        "2017 CSC 33"
+      ],
+      "match_patterns_norm": [
+        "douez c. facebook, inc.",
+        "douez c facebook, inc.",
+        "2017 csc 33"
+      ]
+    },
+    {
+      "domain": "Responsabilité civile (C.c.Q.)",
+      "theme": "Troubles de voisinage",
+      "decision": "Ciment du Saint-Laurent inc. c. Barrette",
+      "citation": "2008 CSC 64",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 976",
+      "principle": "Régime autonome des troubles anormaux de voisinage (sans faute) et critères d'application",
+      "recommended_mention": "Dans la fiche: bloc «Codification» : 976 C.c.Q. = fondement des troubles de voisinage; rappeler que le test provient de la jurisprudence (dont Ciment).",
+      "match_patterns": [
+        "Ciment du Saint-Laurent inc. c. Barrette",
+        "Ciment du Saint-Laurent inc. c Barrette",
+        "2008 CSC 64"
+      ],
+      "match_patterns_norm": [
+        "ciment du saint-laurent inc. c. barrette",
+        "ciment du saint-laurent inc. c barrette",
+        "2008 csc 64"
+      ]
+    },
+    {
+      "domain": "Responsabilité civile (C.c.Q.)",
+      "theme": "Diffamation civile",
+      "decision": "Prud'homme c. Prud'homme",
+      "citation": "2002 CSC 85",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 1457",
+      "principle": "Triptyque faute-préjudice-lien causal appliqué à la diffamation; équilibre avec liberté d'expression",
+      "recommended_mention": "Dans la fiche: relier la diffamation au régime général 1457 et préciser la méthode d'analyse (faute/préjudice/causalité).",
+      "match_patterns": [
+        "Prud'homme c. Prud'homme",
+        "Prud'homme c Prud'homme",
+        "2002 CSC 85"
+      ],
+      "match_patterns_norm": [
+        "prud'homme c. prud'homme",
+        "prud'homme c prud'homme",
+        "2002 csc 85"
+      ]
+    },
+    {
+      "domain": "Responsabilité civile (C.c.Q.)",
+      "theme": "Responsabilité professionnelle (médecins)",
+      "decision": "St-Jean c. Mercier",
+      "citation": "2002 CSC 15",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 1457; (principes de faute et causalité en contexte médical)",
+      "principle": "Standard de conduite du professionnel et appréciation de la faute en responsabilité médicale",
+      "recommended_mention": "Dans la fiche: ancrer à 1457 C.c.Q.; préciser que la faute professionnelle s'évalue selon la conduite attendue d'un professionnel prudent et diligent.",
+      "match_patterns": [
+        "St-Jean c. Mercier",
+        "St-Jean c Mercier",
+        "2002 CSC 15"
+      ],
+      "match_patterns_norm": [
+        "st-jean c. mercier",
+        "st-jean c mercier",
+        "2002 csc 15"
+      ]
+    },
+    {
+      "domain": "Responsabilité civile (C.c.Q.)",
+      "theme": "Responsabilité des ordres professionnels / régulateurs",
+      "decision": "Finney c. Barreau du Québec",
+      "citation": "2004 CSC 36",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 1457; C.c.Q. art. 1376 (application à l'État/organismes publics — par analogie)",
+      "principle": "Faute d'un ordre professionnel dans l'exercice de fonctions de protection du public; standard exigeant",
+      "recommended_mention": "Dans la fiche: relier au régime 1457; ajouter note «contexte public/régulateur» et limites (marge d'appréciation).",
+      "match_patterns": [
+        "Finney c. Barreau du Quebec",
+        "Finney c. Barreau du Québec",
+        "Finney c Barreau du Quebec",
+        "Finney c Barreau du Québec",
+        "2004 CSC 36"
+      ],
+      "match_patterns_norm": [
+        "finney c. barreau du quebec",
+        "finney c. barreau du quebec",
+        "finney c barreau du quebec",
+        "finney c barreau du quebec",
+        "2004 csc 36"
+      ]
+    },
+    {
+      "domain": "Responsabilité civile (C.c.Q.)",
+      "theme": "Responsabilité de l'État / immunités",
+      "decision": "Hinse c. Canada (Procureur général)",
+      "citation": "2015 CSC 35",
+      "tribunal": "CSC",
+      "jurisdiction": "QC/CA-FED",
+      "codification_articles": "C.c.Q. art. 1457, 1376",
+      "principle": "Responsabilité de l'État et faute institutionnelle; analyse des immunités/actes de puissance publique",
+      "recommended_mention": "Dans la fiche: préciser que le fondement civil (QC) passe par 1457 + 1376, sous réserve d'autres règles; mentionner que le pouvoir de clémence implique une analyse spécifique.",
+      "match_patterns": [
+        "Hinse c. Canada (Procureur general)",
+        "Hinse c. Canada (Procureur général)",
+        "Hinse c Canada (Procureur general)",
+        "Hinse c Canada (Procureur général)",
+        "2015 CSC 35"
+      ],
+      "match_patterns_norm": [
+        "hinse c. canada (procureur general)",
+        "hinse c. canada (procureur general)",
+        "hinse c canada (procureur general)",
+        "hinse c canada (procureur general)",
+        "2015 csc 35"
+      ]
+    },
+    {
+      "domain": "Responsabilité civile (C.c.Q.)",
+      "theme": "Responsabilité municipale (omissions / mesures de sécurité)",
+      "decision": "Montréal (Ville) c. Dorval",
+      "citation": "2017 CSC 48",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 1457; règles particulières (municipal) selon le cas",
+      "principle": "Faute et causalité en responsabilité municipale; obligations positives vs discrétion",
+      "recommended_mention": "Dans la fiche: rattacher à 1457 mais rappeler les particularités de la responsabilité municipale (devoir de prudence + contexte de politiques publiques).",
+      "match_patterns": [
+        "Montreal (Ville) c. Dorval",
+        "Montréal (Ville) c. Dorval",
+        "Montreal (Ville) c Dorval",
+        "Montréal (Ville) c Dorval",
+        "2017 CSC 48"
+      ],
+      "match_patterns_norm": [
+        "montreal (ville) c. dorval",
+        "montreal (ville) c. dorval",
+        "montreal (ville) c dorval",
+        "montreal (ville) c dorval",
+        "2017 csc 48"
+      ]
+    },
+    {
+      "domain": "Responsabilité civile (C.c.Q.)",
+      "theme": "Responsabilité municipale (émeute / dommages)",
+      "decision": "Montréal (Ville) c. Lonardi",
+      "citation": "2017 CSC 29",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 1457; interprétation des régimes spéciaux selon le cas",
+      "principle": "Responsabilité et partage de responsabilité en contexte de dommages lors d'un évènement public",
+      "recommended_mention": "Dans la fiche: rattacher au régime 1457 et ajouter note sur l'interaction avec régimes spéciaux/partage de responsabilité.",
+      "match_patterns": [
+        "Montreal (Ville) c. Lonardi",
+        "Montréal (Ville) c. Lonardi",
+        "Montreal (Ville) c Lonardi",
+        "Montréal (Ville) c Lonardi",
+        "2017 CSC 29"
+      ],
+      "match_patterns_norm": [
+        "montreal (ville) c. lonardi",
+        "montreal (ville) c. lonardi",
+        "montreal (ville) c lonardi",
+        "montreal (ville) c lonardi",
+        "2017 csc 29"
+      ]
+    },
+    {
+      "domain": "Responsabilité civile (C.c.Q.)",
+      "theme": "Responsabilité municipale (zonage / autorisations)",
+      "decision": "Sibeca inc. c. Municipalité de Frelighsburg",
+      "citation": "2004 CSC 61",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 1457; droit municipal (régime spécial) selon le cas",
+      "principle": "Faute d'une municipalité dans l'application de règlements; critères de responsabilité",
+      "recommended_mention": "Dans la fiche: ancrer à 1457 et préciser le filtre 'policymaking vs operational' et la bonne foi administrative si discutée.",
+      "match_patterns": [
+        "Sibeca inc. c. Municipalite de Frelighsburg",
+        "Sibeca inc. c. Municipalité de Frelighsburg",
+        "Sibeca inc. c Municipalite de Frelighsburg",
+        "Sibeca inc. c Municipalité de Frelighsburg",
+        "2004 CSC 61"
+      ],
+      "match_patterns_norm": [
+        "sibeca inc. c. municipalite de frelighsburg",
+        "sibeca inc. c. municipalite de frelighsburg",
+        "sibeca inc. c municipalite de frelighsburg",
+        "sibeca inc. c municipalite de frelighsburg",
+        "2004 csc 61"
+      ]
+    },
+    {
+      "domain": "Responsabilité civile (C.c.Q.)",
+      "theme": "Vie privée / image",
+      "decision": "Aubry c. Éditions Vice-Versa inc.",
+      "citation": "[1998] 1 RCS 591",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 35-36; Charte québécoise art. 5",
+      "principle": "Atteinte à la vie privée par publication de photo; équilibre avec liberté d'expression",
+      "recommended_mention": "Dans la fiche: bloc «Codification» : 35-36 C.c.Q. + Charte QC (art. 5) — principes appliqués aux médias.",
+      "match_patterns": [
+        "Aubry c. Editions Vice-Versa inc.",
+        "Aubry c. Éditions Vice-Versa inc.",
+        "Aubry c Editions Vice-Versa inc.",
+        "Aubry c Éditions Vice-Versa inc.",
+        "[1998] 1 RCS 591"
+      ],
+      "match_patterns_norm": [
+        "aubry c. editions vice-versa inc.",
+        "aubry c. editions vice-versa inc.",
+        "aubry c editions vice-versa inc.",
+        "aubry c editions vice-versa inc.",
+        "[1998] 1 rcs 591"
+      ]
+    },
+    {
+      "domain": "Responsabilité civile (C.c.Q.)",
+      "theme": "Diffamation collective",
+      "decision": "Bou Malhab c. Diffusion Métromédia CMR inc.",
+      "citation": "2011 CSC 9",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 1457; C.p.c. art. 575 (recours collectif) (selon le volet)",
+      "principle": "Conditions de la diffamation visant un groupe et preuve du préjudice individuel; interaction avec recours collectif",
+      "recommended_mention": "Dans la fiche: rattacher à 1457 + rappeler les exigences spécifiques quand la diffamation vise un groupe; si recours collectif, pointer vers CPC 575.",
+      "match_patterns": [
+        "Bou Malhab c. Diffusion Metromedia CMR inc.",
+        "Bou Malhab c. Diffusion Métromédia CMR inc.",
+        "Bou Malhab c Diffusion Metromedia CMR inc.",
+        "Bou Malhab c Diffusion Métromédia CMR inc.",
+        "2011 CSC 9"
+      ],
+      "match_patterns_norm": [
+        "bou malhab c. diffusion metromedia cmr inc.",
+        "bou malhab c. diffusion metromedia cmr inc.",
+        "bou malhab c diffusion metromedia cmr inc.",
+        "bou malhab c diffusion metromedia cmr inc.",
+        "2011 csc 9"
+      ]
+    },
+    {
+      "domain": "Procédure civile / recours collectif",
+      "theme": "Autorisation du recours collectif",
+      "decision": "Infineon Technologies AG c. Option consommateurs",
+      "citation": "2013 CSC 59",
+      "tribunal": "CSC",
+      "jurisdiction": "QC (si CPC) / CA (si analogie)",
+      "codification_articles": "C.p.c. art. 575",
+      "principle": "Autorisation: seuil peu élevé; 'cause défendable'",
+      "recommended_mention": "Dans la fiche: toujours ajouter un bloc «Codification» pointant vers l'art. 575 C.p.c. + rappeler l'arrêt comme guide d'interprétation.",
+      "match_patterns": [
+        "Infineon Technologies AG c. Option consommateurs",
+        "Infineon Technologies AG c Option consommateurs",
+        "2013 CSC 59"
+      ],
+      "match_patterns_norm": [
+        "infineon technologies ag c. option consommateurs",
+        "infineon technologies ag c option consommateurs",
+        "2013 csc 59"
+      ]
+    },
+    {
+      "domain": "Procédure civile / recours collectif",
+      "theme": "Autorisation du recours collectif",
+      "decision": "Vivendi Canada inc. c. Dell'Aniello",
+      "citation": "2014 CSC 1",
+      "tribunal": "CSC",
+      "jurisdiction": "QC (si CPC) / CA (si analogie)",
+      "codification_articles": "C.p.c. art. 575",
+      "principle": "Autorisation et 'question commune'; approche flexible",
+      "recommended_mention": "Dans la fiche: toujours ajouter un bloc «Codification» pointant vers l'art. 575 C.p.c. + rappeler l'arrêt comme guide d'interprétation.",
+      "match_patterns": [
+        "Vivendi Canada inc. c. Dell'Aniello",
+        "Vivendi Canada inc. c Dell'Aniello",
+        "2014 CSC 1"
+      ],
+      "match_patterns_norm": [
+        "vivendi canada inc. c. dell'aniello",
+        "vivendi canada inc. c dell'aniello",
+        "2014 csc 1"
+      ]
+    },
+    {
+      "domain": "Procédure civile / recours collectif",
+      "theme": "Autorisation du recours collectif",
+      "decision": "Oratoire Saint-Joseph du Mont-Royal c. J.J.",
+      "citation": "2020 CSC 17",
+      "tribunal": "CSC",
+      "jurisdiction": "QC (si CPC) / CA (si analogie)",
+      "codification_articles": "C.p.c. art. 575; prescription (C.c.Q.) selon le cas",
+      "principle": "Autorisation et prescription; preuve minimale",
+      "recommended_mention": "Dans la fiche: toujours ajouter un bloc «Codification» pointant vers l'art. 575 C.p.c. + rappeler l'arrêt comme guide d'interprétation.",
+      "match_patterns": [
+        "Oratoire Saint-Joseph du Mont-Royal c. J.J.",
+        "Oratoire Saint-Joseph du Mont-Royal c J.J.",
+        "2020 CSC 17"
+      ],
+      "match_patterns_norm": [
+        "oratoire saint-joseph du mont-royal c. j.j.",
+        "oratoire saint-joseph du mont-royal c j.j.",
+        "2020 csc 17"
+      ]
+    },
+    {
+      "domain": "Procédure civile / recours collectif",
+      "theme": "Autorisation du recours collectif",
+      "decision": "Desjardins Cabinet de services financiers inc. c. Asselin",
+      "citation": "2020 CSC 30",
+      "tribunal": "CSC",
+      "jurisdiction": "QC (si CPC) / CA (si analogie)",
+      "codification_articles": "C.p.c. art. 575",
+      "principle": "Autorisation: méthode et fardeau de preuve",
+      "recommended_mention": "Dans la fiche: toujours ajouter un bloc «Codification» pointant vers l'art. 575 C.p.c. + rappeler l'arrêt comme guide d'interprétation.",
+      "match_patterns": [
+        "Desjardins Cabinet de services financiers inc. c. Asselin",
+        "Desjardins Cabinet de services financiers inc. c Asselin",
+        "2020 CSC 30"
+      ],
+      "match_patterns_norm": [
+        "desjardins cabinet de services financiers inc. c. asselin",
+        "desjardins cabinet de services financiers inc. c asselin",
+        "2020 csc 30"
+      ]
+    },
+    {
+      "domain": "Procédure civile / recours collectif",
+      "theme": "Autorisation du recours collectif",
+      "decision": "Bisaillon c. Université Concordia",
+      "citation": "2006 CSC 19",
+      "tribunal": "CSC",
+      "jurisdiction": "QC (si CPC) / CA (si analogie)",
+      "codification_articles": "C.p.c. art. 575; arbitrage",
+      "principle": "Recours collectif vs arbitrage; arbitrabilité",
+      "recommended_mention": "Dans la fiche: toujours ajouter un bloc «Codification» pointant vers l'art. 575 C.p.c. + rappeler l'arrêt comme guide d'interprétation.",
+      "match_patterns": [
+        "Bisaillon c. Universite Concordia",
+        "Bisaillon c. Université Concordia",
+        "Bisaillon c Universite Concordia",
+        "Bisaillon c Université Concordia",
+        "2006 CSC 19"
+      ],
+      "match_patterns_norm": [
+        "bisaillon c. universite concordia",
+        "bisaillon c. universite concordia",
+        "bisaillon c universite concordia",
+        "bisaillon c universite concordia",
+        "2006 csc 19"
+      ]
+    },
+    {
+      "domain": "Procédure civile / recours collectif",
+      "theme": "Autorisation du recours collectif",
+      "decision": "Dell Computer Corp. c. Union des consommateurs",
+      "citation": "2007 CSC 34",
+      "tribunal": "CSC",
+      "jurisdiction": "QC (si CPC) / CA (si analogie)",
+      "codification_articles": "C.p.c. art. 575; LPC art. 11.1",
+      "principle": "Renvoi à l'arbitrage en contexte de recours collectif",
+      "recommended_mention": "Dans la fiche: toujours ajouter un bloc «Codification» pointant vers l'art. 575 C.p.c. + rappeler l'arrêt comme guide d'interprétation.",
+      "match_patterns": [
+        "Dell Computer Corp. c. Union des consommateurs",
+        "Dell Computer Corp. c Union des consommateurs",
+        "2007 CSC 34"
+      ],
+      "match_patterns_norm": [
+        "dell computer corp. c. union des consommateurs",
+        "dell computer corp. c union des consommateurs",
+        "2007 csc 34"
+      ]
+    },
+    {
+      "domain": "Procédure civile / recours collectif",
+      "theme": "Autorisation du recours collectif",
+      "decision": "Ciment du Saint-Laurent inc. c. Barrette",
+      "citation": "2008 CSC 64",
+      "tribunal": "CSC",
+      "jurisdiction": "QC (si CPC) / CA (si analogie)",
+      "codification_articles": "C.p.c. art. 575",
+      "principle": "Autorisation + gestion; aussi fond du litige en 976",
+      "recommended_mention": "Dans la fiche: toujours ajouter un bloc «Codification» pointant vers l'art. 575 C.p.c. + rappeler l'arrêt comme guide d'interprétation.",
+      "match_patterns": [
+        "Ciment du Saint-Laurent inc. c. Barrette",
+        "Ciment du Saint-Laurent inc. c Barrette",
+        "2008 CSC 64"
+      ],
+      "match_patterns_norm": [
+        "ciment du saint-laurent inc. c. barrette",
+        "ciment du saint-laurent inc. c barrette",
+        "2008 csc 64"
+      ]
+    },
+    {
+      "domain": "Procédure civile / recours collectif",
+      "theme": "Autorisation du recours collectif",
+      "decision": "Banque de Montréal c. Marcotte",
+      "citation": "2014 CSC 55",
+      "tribunal": "CSC",
+      "jurisdiction": "QC (si CPC) / CA (si analogie)",
+      "codification_articles": "C.p.c. art. 575; LPC art. 12/272",
+      "principle": "Recours collectif et prépondérance fédérale",
+      "recommended_mention": "Dans la fiche: toujours ajouter un bloc «Codification» pointant vers l'art. 575 C.p.c. + rappeler l'arrêt comme guide d'interprétation.",
+      "match_patterns": [
+        "Banque de Montreal c. Marcotte",
+        "Banque de Montréal c. Marcotte",
+        "Banque de Montreal c Marcotte",
+        "Banque de Montréal c Marcotte",
+        "2014 CSC 55"
+      ],
+      "match_patterns_norm": [
+        "banque de montreal c. marcotte",
+        "banque de montreal c. marcotte",
+        "banque de montreal c marcotte",
+        "banque de montreal c marcotte",
+        "2014 csc 55"
+      ]
+    },
+    {
+      "domain": "Procédure civile / recours collectif",
+      "theme": "Autorisation du recours collectif",
+      "decision": "Pro-Sys Consultants Ltd. c. Microsoft Corporation",
+      "citation": "2013 CSC 57",
+      "tribunal": "CSC",
+      "jurisdiction": "QC (si CPC) / CA (si analogie)",
+      "codification_articles": "C.p.c. art. 575 (analogie) / règles de preuve",
+      "principle": "Pass-on defence et preuve; enseigné en recours collectif",
+      "recommended_mention": "Dans la fiche: toujours ajouter un bloc «Codification» pointant vers l'art. 575 C.p.c. + rappeler l'arrêt comme guide d'interprétation.",
+      "match_patterns": [
+        "Pro-Sys Consultants Ltd. c. Microsoft Corporation",
+        "Pro-Sys Consultants Ltd. c Microsoft Corporation",
+        "2013 CSC 57"
+      ],
+      "match_patterns_norm": [
+        "pro-sys consultants ltd. c. microsoft corporation",
+        "pro-sys consultants ltd. c microsoft corporation",
+        "2013 csc 57"
+      ]
+    },
+    {
+      "domain": "Procédure civile / recours collectif",
+      "theme": "Autorisation du recours collectif",
+      "decision": "Pioneer Corp. c. Godfrey",
+      "citation": "2019 CSC 42",
+      "tribunal": "CSC",
+      "jurisdiction": "QC (si CPC) / CA (si analogie)",
+      "codification_articles": "C.p.c. art. 575 (analogie) / droit de la concurrence",
+      "principle": "Actions collectives concurrence; causes d'action",
+      "recommended_mention": "Dans la fiche: toujours ajouter un bloc «Codification» pointant vers l'art. 575 C.p.c. + rappeler l'arrêt comme guide d'interprétation.",
+      "match_patterns": [
+        "Pioneer Corp. c. Godfrey",
+        "Pioneer Corp. c Godfrey",
+        "2019 CSC 42"
+      ],
+      "match_patterns_norm": [
+        "pioneer corp. c. godfrey",
+        "pioneer corp. c godfrey",
+        "2019 csc 42"
+      ]
+    },
+    {
+      "domain": "Droit constitutionnel / Chartes",
+      "theme": "Charte canadienne / principes constitutionnels",
+      "decision": "R. v. Oakes",
+      "citation": "[1986] 1 RCS 103",
+      "tribunal": "CSC",
+      "jurisdiction": "CA-FED (et QC si Charte QC)",
+      "codification_articles": "Charte canadienne art. 1",
+      "principle": "Test de justification (Oakes)",
+      "recommended_mention": "Dans la fiche: ajouter un encadré «Dispositions clés» (section(s) de la Charte/Constitution) + «Test» (Oakes/Jordan/Grant etc.).",
+      "match_patterns": [
+        "[1986] 1 RCS 103",
+        "R. v. Oakes"
+      ],
+      "match_patterns_norm": [
+        "[1986] 1 rcs 103",
+        "r. v. oakes"
+      ]
+    },
+    {
+      "domain": "Droit constitutionnel / Chartes",
+      "theme": "Charte canadienne / principes constitutionnels",
+      "decision": "Ford c. Québec (Procureur général)",
+      "citation": "[1988] 2 RCS 712",
+      "tribunal": "CSC",
+      "jurisdiction": "CA-FED (et QC si Charte QC)",
+      "codification_articles": "Charte canadienne art. 2b; art. 1; Charte QC (selon le cas)",
+      "principle": "Liberté d'expression et langue; analyse art. 1",
+      "recommended_mention": "Dans la fiche: ajouter un encadré «Dispositions clés» (section(s) de la Charte/Constitution) + «Test» (Oakes/Jordan/Grant etc.).",
+      "match_patterns": [
+        "Ford c. Quebec (Procureur general)",
+        "Ford c. Québec (Procureur général)",
+        "Ford c Quebec (Procureur general)",
+        "Ford c Québec (Procureur général)",
+        "[1988] 2 RCS 712"
+      ],
+      "match_patterns_norm": [
+        "ford c. quebec (procureur general)",
+        "ford c. quebec (procureur general)",
+        "ford c quebec (procureur general)",
+        "ford c quebec (procureur general)",
+        "[1988] 2 rcs 712"
+      ]
+    },
+    {
+      "domain": "Droit constitutionnel / Chartes",
+      "theme": "Charte canadienne / principes constitutionnels",
+      "decision": "Renvoi relatif à la sécession du Québec",
+      "citation": "[1998] 2 RCS 217",
+      "tribunal": "CSC",
+      "jurisdiction": "CA-FED (et QC si Charte QC)",
+      "codification_articles": "Loi constitutionnelle 1867/1982 (principes non écrits)",
+      "principle": "Principes constitutionnels et obligation de négocier",
+      "recommended_mention": "Dans la fiche: ajouter un encadré «Dispositions clés» (section(s) de la Charte/Constitution) + «Test» (Oakes/Jordan/Grant etc.).",
+      "match_patterns": [
+        "Renvoi relatif a la secession du Quebec",
+        "Renvoi relatif à la sécession du Québec",
+        "[1998] 2 RCS 217"
+      ],
+      "match_patterns_norm": [
+        "renvoi relatif a la secession du quebec",
+        "renvoi relatif a la secession du quebec",
+        "[1998] 2 rcs 217"
+      ]
+    },
+    {
+      "domain": "Droit constitutionnel / Chartes",
+      "theme": "Charte canadienne / principes constitutionnels",
+      "decision": "R. c. Sparrow",
+      "citation": "[1990] 1 RCS 1075",
+      "tribunal": "CSC",
+      "jurisdiction": "CA-FED (et QC si Charte QC)",
+      "codification_articles": "Loi constitutionnelle de 1982 art. 35",
+      "principle": "Test Sparrow pour atteinte justifiée aux droits ancestraux",
+      "recommended_mention": "Dans la fiche: ajouter un encadré «Dispositions clés» (section(s) de la Charte/Constitution) + «Test» (Oakes/Jordan/Grant etc.).",
+      "match_patterns": [
+        "[1990] 1 RCS 1075",
+        "R. c. Sparrow",
+        "R. c Sparrow"
+      ],
+      "match_patterns_norm": [
+        "[1990] 1 rcs 1075",
+        "r. c. sparrow",
+        "r. c sparrow"
+      ]
+    },
+    {
+      "domain": "Droit constitutionnel / Chartes",
+      "theme": "Charte canadienne / principes constitutionnels",
+      "decision": "Vriend c. Alberta",
+      "citation": "[1998] 1 RCS 493",
+      "tribunal": "CSC",
+      "jurisdiction": "CA-FED (et QC si Charte QC)",
+      "codification_articles": "Charte canadienne art. 15",
+      "principle": "Égalité — inclusion des motifs analogues",
+      "recommended_mention": "Dans la fiche: ajouter un encadré «Dispositions clés» (section(s) de la Charte/Constitution) + «Test» (Oakes/Jordan/Grant etc.).",
+      "match_patterns": [
+        "Vriend c. Alberta",
+        "Vriend c Alberta",
+        "[1998] 1 RCS 493"
+      ],
+      "match_patterns_norm": [
+        "vriend c. alberta",
+        "vriend c alberta",
+        "[1998] 1 rcs 493"
+      ]
+    },
+    {
+      "domain": "Droit constitutionnel / Chartes",
+      "theme": "Charte canadienne / principes constitutionnels",
+      "decision": "Québec (Procureur général) c. A",
+      "citation": "2013 CSC 5",
+      "tribunal": "CSC",
+      "jurisdiction": "CA-FED (et QC si Charte QC)",
+      "codification_articles": "Charte canadienne art. 15; (droit de la famille QC en toile de fond)",
+      "principle": "Égalité et conjoints de fait",
+      "recommended_mention": "Dans la fiche: ajouter un encadré «Dispositions clés» (section(s) de la Charte/Constitution) + «Test» (Oakes/Jordan/Grant etc.).",
+      "match_patterns": [
+        "Quebec (Procureur general) c. A",
+        "Québec (Procureur général) c. A",
+        "Quebec (Procureur general) c A",
+        "Québec (Procureur général) c A",
+        "2013 CSC 5"
+      ],
+      "match_patterns_norm": [
+        "quebec (procureur general) c. a",
+        "quebec (procureur general) c. a",
+        "quebec (procureur general) c a",
+        "quebec (procureur general) c a",
+        "2013 csc 5"
+      ]
+    },
+    {
+      "domain": "Droit constitutionnel / Chartes",
+      "theme": "Charte canadienne / principes constitutionnels",
+      "decision": "Canada (Procureur général) c. Bedford",
+      "citation": "2013 CSC 72",
+      "tribunal": "CSC",
+      "jurisdiction": "CA-FED (et QC si Charte QC)",
+      "codification_articles": "Charte canadienne art. 7",
+      "principle": "Vie, liberté, sécurité; arbitraire / disproportion / surdétermination",
+      "recommended_mention": "Dans la fiche: ajouter un encadré «Dispositions clés» (section(s) de la Charte/Constitution) + «Test» (Oakes/Jordan/Grant etc.).",
+      "match_patterns": [
+        "Canada (Procureur general) c. Bedford",
+        "Canada (Procureur général) c. Bedford",
+        "Canada (Procureur general) c Bedford",
+        "Canada (Procureur général) c Bedford",
+        "2013 CSC 72"
+      ],
+      "match_patterns_norm": [
+        "canada (procureur general) c. bedford",
+        "canada (procureur general) c. bedford",
+        "canada (procureur general) c bedford",
+        "canada (procureur general) c bedford",
+        "2013 csc 72"
+      ]
+    },
+    {
+      "domain": "Droit constitutionnel / Chartes",
+      "theme": "Charte canadienne / principes constitutionnels",
+      "decision": "Carter c. Canada (Procureur général)",
+      "citation": "2015 CSC 5",
+      "tribunal": "CSC",
+      "jurisdiction": "CA-FED (et QC si Charte QC)",
+      "codification_articles": "Charte canadienne art. 7; art. 1",
+      "principle": "Aide médicale à mourir — art. 7 et justification",
+      "recommended_mention": "Dans la fiche: ajouter un encadré «Dispositions clés» (section(s) de la Charte/Constitution) + «Test» (Oakes/Jordan/Grant etc.).",
+      "match_patterns": [
+        "Carter c. Canada (Procureur general)",
+        "Carter c. Canada (Procureur général)",
+        "Carter c Canada (Procureur general)",
+        "Carter c Canada (Procureur général)",
+        "2015 CSC 5"
+      ],
+      "match_patterns_norm": [
+        "carter c. canada (procureur general)",
+        "carter c. canada (procureur general)",
+        "carter c canada (procureur general)",
+        "carter c canada (procureur general)",
+        "2015 csc 5"
+      ]
+    },
+    {
+      "domain": "Droit constitutionnel / Chartes",
+      "theme": "Charte canadienne / principes constitutionnels",
+      "decision": "R. c. Grant",
+      "citation": "2009 CSC 32",
+      "tribunal": "CSC",
+      "jurisdiction": "CA-FED (et QC si Charte QC)",
+      "codification_articles": "Charte canadienne art. 24(2)",
+      "principle": "Exclusion de la preuve — nouveau cadre",
+      "recommended_mention": "Dans la fiche: ajouter un encadré «Dispositions clés» (section(s) de la Charte/Constitution) + «Test» (Oakes/Jordan/Grant etc.).",
+      "match_patterns": [
+        "2009 CSC 32",
+        "R. c. Grant",
+        "R. c Grant"
+      ],
+      "match_patterns_norm": [
+        "2009 csc 32",
+        "r. c. grant",
+        "r. c grant"
+      ]
+    },
+    {
+      "domain": "Droit constitutionnel / Chartes",
+      "theme": "Charte canadienne / principes constitutionnels",
+      "decision": "R. c. Jordan",
+      "citation": "2016 CSC 27",
+      "tribunal": "CSC",
+      "jurisdiction": "CA-FED (et QC si Charte QC)",
+      "codification_articles": "Charte canadienne art. 11b",
+      "principle": "Délais déraisonnables — plafonds Jordan",
+      "recommended_mention": "Dans la fiche: ajouter un encadré «Dispositions clés» (section(s) de la Charte/Constitution) + «Test» (Oakes/Jordan/Grant etc.).",
+      "match_patterns": [
+        "R. c. Jordan",
+        "2016 CSC 27",
+        "R. c Jordan"
+      ],
+      "match_patterns_norm": [
+        "r. c. jordan",
+        "2016 csc 27",
+        "r. c jordan"
+      ]
+    },
+    {
+      "domain": "Biens — Publicité des droits & prescription acquisitive",
+      "theme": "Prescription acquisitive, registre foncier et priorité des droits (C.c.Q. art. 2918, 2938, 2946, 2963)",
+      "decision": "Ostiguy c. Allie",
+      "citation": "2017 CSC 22",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 2918, 2938, 2946, 2963 (et ss.)",
+      "principle": "Effet du jugement en prescription acquisitive (déclaratif), articulation avec la publicité des droits et protection de l’acquéreur de bonne foi (priorité au premier publié).",
+      "recommended_mention": "Si le client demande *Ostiguy*, ajouter : (1) jugement en prescription acquisitive = effet déclaratif (C.c.Q. 2918), mais (2) ne prime pas un droit publié antérieurement par un tiers de bonne foi (C.c.Q. 2946), avec présomptions liées à la publicité (C.c.Q. 2963).",
+      "match_patterns": [
+        "Ostiguy c. Allie",
+        "Ostiguy c Allie",
+        "2017 CSC 22"
+      ],
+      "match_patterns_norm": [
+        "ostiguy c. allie",
+        "ostiguy c allie",
+        "2017 csc 22"
+      ]
+    },
+    {
+      "domain": "Biens — Publicité des droits & prescription acquisitive",
+      "theme": "Prescription acquisitive, registre foncier et priorité des droits (C.c.Q. art. 2918, 2938, 2946, 2963)",
+      "decision": "Dupuy c. Gauthier",
+      "citation": "2013 QCCA 774",
+      "tribunal": "QCCA",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 2918, 2938, 2946, 2963",
+      "principle": "Conflit entre prescription acquisitive et droits publiés — conditions de protection du tiers de bonne foi.",
+      "recommended_mention": "Si *Dupuy* est cité : relier la solution au couple (prescription/effet déclaratif) + (priorité/publicité) : C.c.Q. 2918 + 2946 + présomption C.c.Q. 2963.",
+      "match_patterns": [
+        "Dupuy c. Gauthier",
+        "Dupuy c Gauthier",
+        "2013 QCCA 774"
+      ],
+      "match_patterns_norm": [
+        "dupuy c. gauthier",
+        "dupuy c gauthier",
+        "2013 qcca 774"
+      ]
+    },
+    {
+      "domain": "Biens — Publicité des droits & prescription acquisitive",
+      "theme": "Prescription acquisitive, registre foncier et priorité des droits (C.c.Q. art. 2918, 2938, 2946, 2963)",
+      "decision": "Craig c. Béton Chevalier inc.",
+      "citation": "2012 QCCS 2888",
+      "tribunal": "QCCS",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 2918 et suiv. (prescription acquisitive); art. 2938 (publicité)",
+      "principle": "Demande en jugement de prescription acquisitive («requête»/demande) et exigences de preuve/publicité.",
+      "recommended_mention": "Quand *Craig* est demandé : rappeler que le jugement «constate» un droit acquis par prescription (C.c.Q. 2918), mais que la publicité demeure centrale (C.c.Q. 2938 et présomptions 2963).",
+      "match_patterns": [
+        "Craig c. Beton Chevalier inc.",
+        "Craig c. Béton Chevalier inc.",
+        "Craig c Beton Chevalier inc.",
+        "Craig c Béton Chevalier inc.",
+        "2012 QCCS 2888"
+      ],
+      "match_patterns_norm": [
+        "craig c. beton chevalier inc.",
+        "craig c. beton chevalier inc.",
+        "craig c beton chevalier inc.",
+        "craig c beton chevalier inc.",
+        "2012 qccs 2888"
+      ]
+    },
+    {
+      "domain": "Biens — Publicité des droits & prescription acquisitive",
+      "theme": "Prescription acquisitive, registre foncier et priorité des droits (C.c.Q. art. 2918, 2938, 2946, 2963)",
+      "decision": "Granby (Ville) c. Gestion Rainville ltée",
+      "citation": "2011 QCCS 4259",
+      "tribunal": "QCCS",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 2918 et suiv.; art. 2938",
+      "principle": "Paramètres de la preuve de possession utile et articulation avec la publicité des droits dans le contexte municipal/immobilier.",
+      "recommended_mention": "Pour *Granby* : lister les critères de possession utile (paix/public/continue/non équivoque) + lien au jugement déclaratif (C.c.Q. 2918) et aux règles de publicité (C.c.Q. 2938).",
+      "match_patterns": [
+        "Granby (Ville) c. Gestion Rainville ltee",
+        "Granby (Ville) c. Gestion Rainville ltée",
+        "Granby (Ville) c Gestion Rainville ltee",
+        "Granby (Ville) c Gestion Rainville ltée",
+        "2011 QCCS 4259"
+      ],
+      "match_patterns_norm": [
+        "granby (ville) c. gestion rainville ltee",
+        "granby (ville) c. gestion rainville ltee",
+        "granby (ville) c gestion rainville ltee",
+        "granby (ville) c gestion rainville ltee",
+        "2011 qccs 4259"
+      ]
+    },
+    {
+      "domain": "Biens — Publicité des droits & prescription acquisitive",
+      "theme": "Prescription acquisitive, registre foncier et priorité des droits (C.c.Q. art. 2918, 2938, 2946, 2963)",
+      "decision": "Re Gagné",
+      "citation": "2009 QCCS 6064",
+      "tribunal": "QCCS",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 2918 et suiv.; art. 2938",
+      "principle": "Structure d’une demande en prescription acquisitive et contrôle judiciaire (preuve, titres, plans).",
+      "recommended_mention": "Pour *Re Gagné* : transformer la fiche en checklist : possession utile + corroboration (plans, chaîne de titres) + rappel que le jugement est déclaratif (C.c.Q. 2918).",
+      "match_patterns": [
+        "2009 QCCS 6064",
+        "Re Gagne",
+        "Re Gagné"
+      ],
+      "match_patterns_norm": [
+        "2009 qccs 6064",
+        "re gagne",
+        "re gagne"
+      ]
+    },
+    {
+      "domain": "Biens — Publicité des droits & prescription acquisitive",
+      "theme": "Prescription acquisitive, registre foncier et priorité des droits (C.c.Q. art. 2918, 2938, 2946, 2963)",
+      "decision": "Re Montmagny (Ville)",
+      "citation": "2005 CanLII 11604 (QC CS)",
+      "tribunal": "QCCS",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 2918 et suiv.; art. 2938",
+      "principle": "Jurisprudence de référence sur la forme/éléments requis d’une demande en prescription acquisitive.",
+      "recommended_mention": "Quand *Re Montmagny* est demandé : donner la «structure standard» d’une demande en prescription acquisitive et relier à C.c.Q. 2918 (effet) + 2938 (publicité).",
+      "match_patterns": [
+        "2005 CanLII 11604 (QC CS)",
+        "Re Montmagny (Ville)"
+      ],
+      "match_patterns_norm": [
+        "2005 canlii 11604 (qc cs)",
+        "re montmagny (ville)"
+      ]
+    },
+    {
+      "domain": "Biens — Publicité des droits & prescription acquisitive",
+      "theme": "Prescription acquisitive, registre foncier et priorité des droits (C.c.Q. art. 2918, 2938, 2946, 2963)",
+      "decision": "Re Béland",
+      "citation": "2005 CanLII 24349 (QC CS)",
+      "tribunal": "QCCS",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 2918 et suiv.; art. 2938",
+      "principle": "Exigences de preuve et de publicité dans une réclamation de prescription acquisitive.",
+      "recommended_mention": "Pour *Re Béland* : rappeler les éléments de possession utile + les documents probatoires attendus, puis rattacher à C.c.Q. 2918.",
+      "match_patterns": [
+        "2005 CanLII 24349 (QC CS)",
+        "Re Beland",
+        "Re Béland"
+      ],
+      "match_patterns_norm": [
+        "2005 canlii 24349 (qc cs)",
+        "re beland",
+        "re beland"
+      ]
+    },
+    {
+      "domain": "Biens — Publicité des droits & prescription acquisitive",
+      "theme": "Prescription acquisitive, registre foncier et priorité des droits (C.c.Q. art. 2918, 2938, 2946, 2963)",
+      "decision": "Cabana c. Valiquette",
+      "citation": "2013 QCCS 4710; conf. 2015 QCCA 1520",
+      "tribunal": "QCCS / QCCA",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 2918, 2938, 2946, 2963",
+      "principle": "Litige de prescription acquisitive avec enjeux de publication (conflits de titres/tiers).",
+      "recommended_mention": "Si *Cabana* : isoler (i) possession utile + (ii) opposabilité/publicité; mentionner que la publication protège le tiers (C.c.Q. 2946) et que la connaissance est présumée (C.c.Q. 2963).",
+      "match_patterns": [
+        "2013 QCCS 4710; conf. 2015 QCCA 1520",
+        "Cabana c. Valiquette",
+        "Cabana c Valiquette"
+      ],
+      "match_patterns_norm": [
+        "2013 qccs 4710; conf. 2015 qcca 1520",
+        "cabana c. valiquette",
+        "cabana c valiquette"
+      ]
+    },
+    {
+      "domain": "Biens — Publicité des droits & prescription acquisitive",
+      "theme": "Prescription acquisitive, registre foncier et priorité des droits (C.c.Q. art. 2918, 2938, 2946, 2963)",
+      "decision": "Breton c. Fortin",
+      "citation": "2016 QCCS 6149",
+      "tribunal": "QCCS",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 2918 et suiv.; art. 2938",
+      "principle": "Précisions sur l’analyse de la possession et la preuve requise en prescription acquisitive.",
+      "recommended_mention": "Quand *Breton* : présenter les critères de possession utile sous forme de tests (faits → critères) + rappel jugement déclaratif (C.c.Q. 2918).",
+      "match_patterns": [
+        "Breton c. Fortin",
+        "Breton c Fortin",
+        "2016 QCCS 6149"
+      ],
+      "match_patterns_norm": [
+        "breton c. fortin",
+        "breton c fortin",
+        "2016 qccs 6149"
+      ]
+    },
+    {
+      "domain": "Biens — Publicité des droits & prescription acquisitive",
+      "theme": "Prescription acquisitive, registre foncier et priorité des droits (C.c.Q. art. 2918, 2938, 2946, 2963)",
+      "decision": "Gosselin c. Turner",
+      "citation": "2012 QCCS 388",
+      "tribunal": "QCCS",
+      "jurisdiction": "QC",
+      "codification_articles": "C.c.Q. art. 2918 et suiv.; art. 2938",
+      "principle": "Exemple de raisonnement factuel (possession utile) appliqué au droit de propriété acquis par prescription.",
+      "recommended_mention": "Si *Gosselin* : générer une section «preuve» (témoignages, taxes, clôtures, actes matériels) et relier à C.c.Q. 2918 (effet).",
+      "match_patterns": [
+        "Gosselin c. Turner",
+        "Gosselin c Turner",
+        "2012 QCCS 388"
+      ],
+      "match_patterns_norm": [
+        "gosselin c. turner",
+        "gosselin c turner",
+        "2012 qccs 388"
+      ]
+    },
+    {
+      "domain": "Droit du travail — droits collectifs, normes du travail, accommodement",
+      "theme": "Protection contre représailles (C.t. art. 15-17), gel des conditions (C.t. art. 59/100.10), normes minimales (LNT), accommodement (Charte QC / LATMP), liberté d’association (Charte canadienne s.2d)",
+      "decision": "Plourde c. Wal-Mart Canada Corp.",
+      "citation": "2009 CSC 54",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "Code du travail (RLRQ, c. C-27) art. 15-17 (représailles antisyndicales); remèdes",
+      "principle": "Recours antisyndical (art. 15-17 C.t.) — portée du remède (réintégration) lorsque l’employeur a fermé l’établissement.",
+      "recommended_mention": "Si *Plourde* : mentionner explicitement que la plainte est fondée sur art. 15-17 C.t.; préciser les limites du remède quand la réintégration implique la réouverture.",
+      "match_patterns": [
+        "Plourde c. Wal-Mart Canada Corp.",
+        "Plourde c Wal-Mart Canada Corp.",
+        "2009 CSC 54"
+      ],
+      "match_patterns_norm": [
+        "plourde c. wal-mart canada corp.",
+        "plourde c wal-mart canada corp.",
+        "2009 csc 54"
+      ]
+    },
+    {
+      "domain": "Droit du travail — droits collectifs, normes du travail, accommodement",
+      "theme": "Protection contre représailles (C.t. art. 15-17), gel des conditions (C.t. art. 59/100.10), normes minimales (LNT), accommodement (Charte QC / LATMP), liberté d’association (Charte canadienne s.2d)",
+      "decision": "TUAC, section locale 503 c. Wal-Mart Canada Corp.",
+      "citation": "2014 CSC 45",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "Code du travail art. 59 (maintien conditions) et art. 100.10-100.12 (arbitrage)",
+      "principle": "Gel des conditions de travail pendant l’accréditation (art. 59 C.t.) — contrôle arbitral via art. 100.10.",
+      "recommended_mention": "Si *Wal-Mart 2014* : ajouter une section «art. 59 C.t. = gel» + mécanisme d’arbitrage (art. 100.10) et standard d’intervention.",
+      "match_patterns": [
+        "TUAC, section locale 503 c. Wal-Mart Canada Corp.",
+        "TUAC, section locale 503 c Wal-Mart Canada Corp.",
+        "2014 CSC 45"
+      ],
+      "match_patterns_norm": [
+        "tuac, section locale 503 c. wal-mart canada corp.",
+        "tuac, section locale 503 c wal-mart canada corp.",
+        "2014 csc 45"
+      ]
+    },
+    {
+      "domain": "Droit du travail — droits collectifs, normes du travail, accommodement",
+      "theme": "Protection contre représailles (C.t. art. 15-17), gel des conditions (C.t. art. 59/100.10), normes minimales (LNT), accommodement (Charte QC / LATMP), liberté d’association (Charte canadienne s.2d)",
+      "decision": "Isidore Garon ltée c. Tremblay; Fillion et Frères (1976) inc. c. Syndicat national des employés de garage du Québec inc.",
+      "citation": "2006 CSC 2",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "Loi sur les normes du travail (LNT) art. 82 et suiv. (préavis) + art. 124 (recours); interaction avec conventions collectives",
+      "principle": "Préavis et «délai de congé raisonnable» en contexte syndiqué — articulation LNT / conventions collectives / arbitrage.",
+      "recommended_mention": "Si *Isidore Garon* : dans la fiche, pointer (i) préavis LNT (art. 82) + (ii) recours (art. 124) + (iii) rôle de l’arbitre vs tribunaux.",
+      "match_patterns": [
+        "Isidore Garon ltee c. Tremblay; Fillion et Freres (1976) inc. c. Syndicat national des employes de garage du Quebec inc.",
+        "Isidore Garon ltée c. Tremblay; Fillion et Frères (1976) inc. c. Syndicat national des employés de garage du Québec inc.",
+        "Isidore Garon ltee c Tremblay; Fillion et Freres (1976) inc. c Syndicat national des employes de garage du Quebec inc.",
+        "Isidore Garon ltée c Tremblay; Fillion et Frères (1976) inc. c Syndicat national des employés de garage du Québec inc.",
+        "2006 CSC 2"
+      ],
+      "match_patterns_norm": [
+        "isidore garon ltee c. tremblay; fillion et freres (1976) inc. c. syndicat national des employes de garage du quebec inc.",
+        "isidore garon ltee c. tremblay; fillion et freres (1976) inc. c. syndicat national des employes de garage du quebec inc.",
+        "isidore garon ltee c tremblay; fillion et freres (1976) inc. c syndicat national des employes de garage du quebec inc.",
+        "isidore garon ltee c tremblay; fillion et freres (1976) inc. c syndicat national des employes de garage du quebec inc.",
+        "2006 csc 2"
+      ]
+    },
+    {
+      "domain": "Droit du travail — droits collectifs, normes du travail, accommodement",
+      "theme": "Protection contre représailles (C.t. art. 15-17), gel des conditions (C.t. art. 59/100.10), normes minimales (LNT), accommodement (Charte QC / LATMP), liberté d’association (Charte canadienne s.2d)",
+      "decision": "Québec (Commission des normes du travail) c. Asphalte Desjardins inc.",
+      "citation": "2014 CSC 51",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "LNT art. 82 et suiv. (préavis) — résiliation avant l’échéance d’un avis de démission; protection minimale",
+      "principle": "L’employeur qui met fin à l’emploi avant la date de démission annoncée peut devoir le préavis/indemnité — finalité protectrice de la LNT.",
+      "recommended_mention": "Si *Asphalte Desjardins* : ajouter une règle claire «démission avec préavis ≠ renonciation au préavis de l’employeur» + citer l’objectif de protection.",
+      "match_patterns": [
+        "Quebec (Commission des normes du travail) c. Asphalte Desjardins inc.",
+        "Québec (Commission des normes du travail) c. Asphalte Desjardins inc.",
+        "Quebec (Commission des normes du travail) c Asphalte Desjardins inc.",
+        "Québec (Commission des normes du travail) c Asphalte Desjardins inc.",
+        "2014 CSC 51"
+      ],
+      "match_patterns_norm": [
+        "quebec (commission des normes du travail) c. asphalte desjardins inc.",
+        "quebec (commission des normes du travail) c. asphalte desjardins inc.",
+        "quebec (commission des normes du travail) c asphalte desjardins inc.",
+        "quebec (commission des normes du travail) c asphalte desjardins inc.",
+        "2014 csc 51"
+      ]
+    },
+    {
+      "domain": "Droit du travail — droits collectifs, normes du travail, accommodement",
+      "theme": "Protection contre représailles (C.t. art. 15-17), gel des conditions (C.t. art. 59/100.10), normes minimales (LNT), accommodement (Charte QC / LATMP), liberté d’association (Charte canadienne s.2d)",
+      "decision": "Hydro-Québec c. Syndicat des employé-e-s de techniques professionnelles et de bureau d'Hydro-Québec, section locale 2000 (SCFP-FTQ)",
+      "citation": "2008 CSC 43",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "Charte QC (C-12) — handicap/accommodement; principes d’accommodement en milieu de travail (limite = contrainte excessive)",
+      "principle": "Test d’accommodement/contrainte excessive : l’employeur n’a pas à «modifier l’essence» du contrat; focus sur capacité de fournir une prestation régulière à l’avenir.",
+      "recommended_mention": "Si *Hydro-Québec* : inclure un encadré «test pratique» (capacité raisonnablement prévisible + contrainte excessive) et rappeler la base Charte QC.",
+      "match_patterns": [
+        "Hydro-Quebec c. Syndicat des employe-e-s de techniques professionnelles et de bureau d'Hydro-Quebec, section locale 2000 (SCFP-FTQ)",
+        "Hydro-Québec c. Syndicat des employé-e-s de techniques professionnelles et de bureau d'Hydro-Québec, section locale 2000 (SCFP-FTQ)",
+        "Hydro-Quebec c Syndicat des employe-e-s de techniques professionnelles et de bureau d'Hydro-Quebec, section locale 2000 (SCFP-FTQ)",
+        "Hydro-Québec c Syndicat des employé-e-s de techniques professionnelles et de bureau d'Hydro-Québec, section locale 2000 (SCFP-FTQ)",
+        "2008 CSC 43"
+      ],
+      "match_patterns_norm": [
+        "hydro-quebec c. syndicat des employe-e-s de techniques professionnelles et de bureau d'hydro-quebec, section locale 2000 (scfp-ftq)",
+        "hydro-quebec c. syndicat des employe-e-s de techniques professionnelles et de bureau d'hydro-quebec, section locale 2000 (scfp-ftq)",
+        "hydro-quebec c syndicat des employe-e-s de techniques professionnelles et de bureau d'hydro-quebec, section locale 2000 (scfp-ftq)",
+        "hydro-quebec c syndicat des employe-e-s de techniques professionnelles et de bureau d'hydro-quebec, section locale 2000 (scfp-ftq)",
+        "2008 csc 43"
+      ]
+    },
+    {
+      "domain": "Droit du travail — droits collectifs, normes du travail, accommodement",
+      "theme": "Protection contre représailles (C.t. art. 15-17), gel des conditions (C.t. art. 59/100.10), normes minimales (LNT), accommodement (Charte QC / LATMP), liberté d’association (Charte canadienne s.2d)",
+      "decision": "Québec (CNESST) c. Caron",
+      "citation": "2018 CSC 3",
+      "tribunal": "CSC",
+      "jurisdiction": "QC",
+      "codification_articles": "LATMP (RLRQ, c. A-3.001) chap. Réadaptation (art. 145-187) + Charte QC (C-12)",
+      "principle": "Obligation d’accommodement dans le cadre des lésions professionnelles : interaction LATMP / Charte QC, rôle CNESST/TAT.",
+      "recommended_mention": "Si *Caron* : distinguer (i) mécanismes LATMP (réadaptation) et (ii) norme d’accommodement/contrainte excessive de la Charte; signaler la logique de «protection du lien d’emploi».",
+      "match_patterns": [
+        "Quebec (CNESST) c. Caron",
+        "Québec (CNESST) c. Caron",
+        "Quebec (CNESST) c Caron",
+        "Québec (CNESST) c Caron",
+        "2018 CSC 3"
+      ],
+      "match_patterns_norm": [
+        "quebec (cnesst) c. caron",
+        "quebec (cnesst) c. caron",
+        "quebec (cnesst) c caron",
+        "quebec (cnesst) c caron",
+        "2018 csc 3"
+      ]
+    },
+    {
+      "domain": "Droit du travail — droits collectifs, normes du travail, accommodement",
+      "theme": "Protection contre représailles (C.t. art. 15-17), gel des conditions (C.t. art. 59/100.10), normes minimales (LNT), accommodement (Charte QC / LATMP), liberté d’association (Charte canadienne s.2d)",
+      "decision": "Health Services and Support – Facilities Subsector Bargaining Assn. c. Colombie-Britannique",
+      "citation": "2007 CSC 27",
+      "tribunal": "CSC",
+      "jurisdiction": "CA",
+      "codification_articles": "Charte canadienne art. 2(d) + art. 1 (limites)",
+      "principle": "Reconnaissance constitutionnelle de la négociation collective comme composante de la liberté d’association.",
+      "recommended_mention": "Si une fiche de droit du travail traite de liberté d’association : citer *Health Services* et rattacher au texte codifié (Charte, art. 2(d)).",
+      "match_patterns": [
+        "Health Services and Support – Facilities Subsector Bargaining Assn. c. Colombie-Britannique",
+        "Health Services and Support – Facilities Subsector Bargaining Assn. c Colombie-Britannique",
+        "2007 CSC 27"
+      ],
+      "match_patterns_norm": [
+        "health services and support – facilities subsector bargaining assn. c. colombie-britannique",
+        "health services and support – facilities subsector bargaining assn. c colombie-britannique",
+        "2007 csc 27"
+      ]
+    },
+    {
+      "domain": "Droit du travail — droits collectifs, normes du travail, accommodement",
+      "theme": "Protection contre représailles (C.t. art. 15-17), gel des conditions (C.t. art. 59/100.10), normes minimales (LNT), accommodement (Charte QC / LATMP), liberté d’association (Charte canadienne s.2d)",
+      "decision": "Mounted Police Association of Ontario c. Canada (Procureur général)",
+      "citation": "2015 CSC 1",
+      "tribunal": "CSC",
+      "jurisdiction": "CA",
+      "codification_articles": "Charte canadienne art. 2(d) + art. 1",
+      "principle": "Cadre analytique modernisé de la liberté d’association; protection du choix d’un véritable agent de négociation.",
+      "recommended_mention": "Pour les fiches «droits collectifs» : mentionner l’exigence de «représentation véritable» sous 2(d).",
+      "match_patterns": [
+        "Mounted Police Association of Ontario c. Canada (Procureur general)",
+        "Mounted Police Association of Ontario c. Canada (Procureur général)",
+        "Mounted Police Association of Ontario c Canada (Procureur general)",
+        "Mounted Police Association of Ontario c Canada (Procureur général)",
+        "2015 CSC 1"
+      ],
+      "match_patterns_norm": [
+        "mounted police association of ontario c. canada (procureur general)",
+        "mounted police association of ontario c. canada (procureur general)",
+        "mounted police association of ontario c canada (procureur general)",
+        "mounted police association of ontario c canada (procureur general)",
+        "2015 csc 1"
+      ]
+    },
+    {
+      "domain": "Droit du travail — droits collectifs, normes du travail, accommodement",
+      "theme": "Protection contre représailles (C.t. art. 15-17), gel des conditions (C.t. art. 59/100.10), normes minimales (LNT), accommodement (Charte QC / LATMP), liberté d’association (Charte canadienne s.2d)",
+      "decision": "Saskatchewan Federation of Labour c. Saskatchewan",
+      "citation": "2015 CSC 4",
+      "tribunal": "CSC",
+      "jurisdiction": "CA",
+      "codification_articles": "Charte canadienne art. 2(d) + art. 1",
+      "principle": "Le droit de grève comme composante protégée de la liberté d’association (dans certaines limites).",
+      "recommended_mention": "Dans une fiche sur grève/services essentiels : associer la règle au texte codifié (2(d)) et à la logique de proportionnalité (art. 1).",
+      "match_patterns": [
+        "Saskatchewan Federation of Labour c. Saskatchewan",
+        "Saskatchewan Federation of Labour c Saskatchewan",
+        "2015 CSC 4"
+      ],
+      "match_patterns_norm": [
+        "saskatchewan federation of labour c. saskatchewan",
+        "saskatchewan federation of labour c saskatchewan",
+        "2015 csc 4"
+      ]
+    },
+    {
+      "domain": "Droit du travail — droits collectifs, normes du travail, accommodement",
+      "theme": "Protection contre représailles (C.t. art. 15-17), gel des conditions (C.t. art. 59/100.10), normes minimales (LNT), accommodement (Charte QC / LATMP), liberté d’association (Charte canadienne s.2d)",
+      "decision": "Ontario (Procureur général) c. Fraser",
+      "citation": "2011 CSC 20",
+      "tribunal": "CSC",
+      "jurisdiction": "CA",
+      "codification_articles": "Charte canadienne art. 2(d)",
+      "principle": "Seuil de «diminution substantielle» / interférence substantielle avec l’action collective; contours du devoir de bonne foi du législateur.",
+      "recommended_mention": "Pour les fiches sur 2(d) en droit du travail : exposer le test d’atteinte (interférence substantielle) et replacer *Fraser* dans la chronologie Health Services → 2015.",
+      "match_patterns": [
+        "Ontario (Procureur general) c. Fraser",
+        "Ontario (Procureur général) c. Fraser",
+        "Ontario (Procureur general) c Fraser",
+        "Ontario (Procureur général) c Fraser",
+        "2011 CSC 20"
+      ],
+      "match_patterns_norm": [
+        "ontario (procureur general) c. fraser",
+        "ontario (procureur general) c. fraser",
+        "ontario (procureur general) c fraser",
+        "ontario (procureur general) c fraser",
+        "2011 csc 20"
+      ]
+    }
+  ]
+}

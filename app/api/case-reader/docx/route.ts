@@ -30,6 +30,23 @@ function p(text: string) {
   });
 }
 
+function formatContext(ctx: any): string {
+  if (!ctx || typeof ctx !== "object") return "";
+  const parts: string[] = [];
+  if (ctx.case_name) parts.push(String(ctx.case_name));
+  const line2: string[] = [];
+  if (ctx.tribunal) line2.push(String(ctx.tribunal));
+  if (ctx.jurisdiction) line2.push(String(ctx.jurisdiction));
+  if (ctx.date) line2.push(String(ctx.date));
+  if (line2.length) parts.push(line2.join(" — "));
+  const line3: string[] = [];
+  if (ctx.neutral_citation) line3.push(String(ctx.neutral_citation));
+  if (ctx.docket) line3.push(`Dossier: ${ctx.docket}`);
+  if (line3.length) parts.push(line3.join(" · "));
+  if (ctx.notes) parts.push(String(ctx.notes));
+  return parts.join("\n");
+}
+
 function bullet(text: string) {
   return new Paragraph({
     text: String(text ?? ""),
@@ -121,8 +138,27 @@ export async function POST(req: Request) {
     }
 
 
-    children.push(h("1. Contexte", HeadingLevel.HEADING_1));
-    children.push(p(JSON.stringify(out.context ?? {}, null, 2)));
+    children.push(h("6. Portée (cours) + En examen", HeadingLevel.HEADING_1));
+    children.push(p(`Cours: ${out.scope_for_course?.course ?? ""}`));
+    children.push(p(out.scope_for_course?.what_it_changes ?? ""));
+
+    children.push(h("En examen, si tu vois…", HeadingLevel.HEADING_2));
+    children.push(p(out.scope_for_course?.exam_spotting_box?.trigger ?? ""));
+
+    children.push(h("Fais ça", HeadingLevel.HEADING_3));
+    for (const x of safeArray<string>(out.scope_for_course?.exam_spotting_box?.do_this)) {
+      children.push(bullet(x));
+    }
+
+    children.push(h("Pièges", HeadingLevel.HEADING_3));
+    for (const x of safeArray<string>(out.scope_for_course?.exam_spotting_box?.pitfalls)) {
+      children.push(bullet(x));
+    }
+
+    
+
+children.push(h("1. Contexte", HeadingLevel.HEADING_1));
+    children.push(p(formatContext(out.context)));
 
     children.push(h("2. Faits essentiels", HeadingLevel.HEADING_1));
     children.push(p(out.facts?.summary ?? ""));
@@ -152,23 +188,6 @@ export async function POST(req: Request) {
       children.push(bullet(`${s?.step ?? ""} — ${s?.analysis ?? ""}`));
     }
     children.push(p(`Ratio / résultat: ${out.application_reasoning?.ratio_or_result ?? ""}`));
-
-    children.push(h("6. Portée (cours) + En examen", HeadingLevel.HEADING_1));
-    children.push(p(`Cours: ${out.scope_for_course?.course ?? ""}`));
-    children.push(p(out.scope_for_course?.what_it_changes ?? ""));
-
-    children.push(h("En examen, si tu vois…", HeadingLevel.HEADING_2));
-    children.push(p(out.scope_for_course?.exam_spotting_box?.trigger ?? ""));
-
-    children.push(h("Fais ça", HeadingLevel.HEADING_3));
-    for (const x of safeArray<string>(out.scope_for_course?.exam_spotting_box?.do_this)) {
-      children.push(bullet(x));
-    }
-
-    children.push(h("Pièges", HeadingLevel.HEADING_3));
-    for (const x of safeArray<string>(out.scope_for_course?.exam_spotting_box?.pitfalls)) {
-      children.push(bullet(x));
-    }
 
     children.push(h("7. Takeaways", HeadingLevel.HEADING_1));
     for (const x of safeArray<string>(out.takeaways)) {

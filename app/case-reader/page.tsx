@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { extractPdfTextFromFile } from "@/lib/case-reader/pdfText.client";
-export const dynamic = "force-dynamic";
 
+export const dynamic = "force-dynamic";
 
 type Clarify = {
   type: "clarify";
@@ -14,24 +14,29 @@ type Clarify = {
 type Answer = {
   type: "answer";
   output_mode: "fiche" | "analyse_longue";
-  meta: any;
-  context: any;
-  facts: any;
-  issues: string[];
-  rule_test: any;
-  application_reasoning: any;
-  scope_for_course: any;
-  takeaways: string[];
-  anchors: any[];
+  meta?: any;
+  context?: any;
+  facts?: any;
+  issues?: any[];
+  rule_test?: any;
+  application_reasoning?: any;
+  scope_for_course?: any;
+  takeaways?: string[];
+  anchors?: any[];
   clarification_questions?: string[];
 };
 
-type Output = Clarify | Answer | any;
+type Data = Clarify | Answer;
 
 function safeStr(x: any) {
-  if (x === null || x === undefined) return "";
+  if (x == null) return "";
   if (typeof x === "string") return x;
-  return String(x);
+  if (typeof x === "number" || typeof x === "boolean") return String(x);
+  try {
+    return JSON.stringify(x);
+  } catch {
+    return String(x);
+  }
 }
 
 function isPdfFile(file: File) {
@@ -49,36 +54,62 @@ function isDocxFile(file: File) {
   );
 }
 
+function formatContextAsText(ctx: any): string {
+  if (!ctx || typeof ctx !== "object") return "";
+  const parts: string[] = [];
+  if (ctx.case_name) parts.push(String(ctx.case_name));
+  const line2: string[] = [];
+  if (ctx.tribunal) line2.push(String(ctx.tribunal));
+  if (ctx.jurisdiction) line2.push(String(ctx.jurisdiction));
+  if (ctx.date) line2.push(String(ctx.date));
+  if (line2.length) parts.push(line2.join(" — "));
+  const line3: string[] = [];
+  if (ctx.neutral_citation) line3.push(String(ctx.neutral_citation));
+  if (ctx.docket) line3.push(`Dossier: ${ctx.docket}`);
+  if (line3.length) parts.push(line3.join(" · "));
+  if (ctx.notes) parts.push(String(ctx.notes));
+  return parts.join("\n");
+}
+
 export default function CaseReaderPage() {
-  const [caseText, setCaseText] = useState("");
   const [outputMode, setOutputMode] = useState<"fiche" | "analyse_longue">("analyse_longue");
   const [institutionSlug, setInstitutionSlug] = useState("udes");
   const [courseSlug, setCourseSlug] = useState("obligations-1");
 
   const [file, setFile] = useState<File | null>(null);
+  const [extractedText, setExtractedText] = useState<string>("");
 
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
   const [status, setStatus] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<Output | null>(null);
+  const [data, setData] = useState<Data | null>(null);
 
-  const canDownload = useMemo(() => {
-    return data && data.type === "answer";
-  }, [data]);
+  const canDownload = useMemo(() => data?.type === "answer", [data]);
 
-  async function onExtractFile() {
-    if (!file) return;
+  async function analyzeFile() {
+    if (!file) {
+      setError("Choisis un fichier PDF ou DOCX.");
+      return;
+    }
+    if (!isPdfFile(file) && !isDocxFile(file)) {
+      setError("Format non supporté. Formats acceptés: PDF ou DOCX.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setStatus(null);
-    setData(null); // on efface l’ancienne sortie si on change le texte
+    setData(null);
+    setExtractedText("");
 
     try {
-      // ✅ 1) PDF => extraction côté client (évite canvas sur Vercel)
+      // 1) Extraction
+      let text = "";
+
       if (isPdfFile(file)) {
-        const text = await extractPdfTextFromFile(file);
+        text = await extractPdfTextFromFile(file);
 
         // Heuristique "PDF scanné" : trop peu de caractères non-espace
         const compact = text.replace(/\s+/g, "");
@@ -86,78 +117,55 @@ export default function CaseReaderPage() {
           throw new Error(
             "Ce PDF semble être un scan (image) : il ne contient pas de texte sélectionnable.\n\n" +
               "Solutions :\n" +
-              "• Exporter la décision en PDF texte (depuis Word/CanLII/éditeur) ou utiliser un DOCX\n" +
-              "• Ou copier-coller le texte directement dans la zone\n"
+              "• Exporter la décision en PDF texte (depuis un éditeur)\n" +
+              "• Ou utiliser un DOCX\n"
           );
         }
-
-        setCaseText(text);
-        return;
-      }
-
-      // ✅ 2) DOCX => extraction côté serveur (ça marche déjà)
-      if (isDocxFile(file)) {
+      } else {
         const fd = new FormData();
         fd.append("file", file);
 
         const res = await fetch("/api/case-reader/extract", { method: "POST", body: fd });
-        setStatus(res.status);
-
-        const text = await res.text();
-        let json: any;
-        try {
-          json = JSON.parse(text);
-        } catch {
-          throw new Error("Réponse non-JSON (extract): " + text.slice(0, 300));
+        const j = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(j?.error || `Extraction DOCX échouée (${res.status})`);
         }
-
-        if (!res.ok) throw new Error(json?.error ?? `Extraction error (${res.status})`);
-
-        setCaseText(json.extracted_text ?? "");
-        return;
+        text = String(j?.extracted_text ?? "");
       }
 
-      throw new Error("Format non supporté. Utilise un fichier .pdf ou .docx.");
-    } catch (e: any) {
-      setError(String(e?.message ?? e));
-    } finally {
-      setLoading(false);
-    }
-  }
+      text = text.trim();
+      if (!text) throw new Error("Aucun texte extractible trouvé dans ce fichier.");
 
-  async function onGenerate() {
-    setLoading(true);
-    setError(null);
-    setData(null);
-    setStatus(null);
+      setExtractedText(text);
 
-    try {
-      const res = await fetch("/api/case-reader", {
+      // 2) Génération AUTOMATIQUE (pas de bouton 'Générer')
+      const res2 = await fetch("/api/case-reader", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           output_mode: outputMode,
-          case_text: caseText,
+          case_text: text,
           institution_slug: institutionSlug,
-          course_slug: courseSlug
+          course_slug: courseSlug,
+          source_kind: isPdfFile(file) ? "pdf" : "docx",
+          filename: file.name
         })
       });
 
-      setStatus(res.status);
-      const text = await res.text();
-
-      let json: any;
+      setStatus(res2.status);
+      const raw = await res2.text();
+      let parsed: any = null;
       try {
-        json = JSON.parse(text);
+        parsed = JSON.parse(raw);
       } catch {
-        throw new Error("Réponse non-JSON: " + text.slice(0, 300));
+        throw new Error("Réponse non-JSON du serveur. Voir détails.");
       }
 
-      if (!res.ok) {
-        throw new Error(json?.error ?? `Erreur API (${res.status})`);
-      }
+      setData(parsed as Data);
 
-      setData(json);
+      if (!res2.ok) {
+        throw new Error(parsed?.error || `Erreur serveur (${res2.status})`);
+      }
     } catch (e: any) {
       setError(String(e?.message ?? e));
     } finally {
@@ -178,22 +186,18 @@ export default function CaseReaderPage() {
       });
 
       if (!res.ok) {
-        const t = await res.text();
-        throw new Error("Download failed: " + t.slice(0, 300));
+        const j = await res.json().catch(() => null);
+        throw new Error(j?.error || `DOCX failed (${res.status})`);
       }
 
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-
-      const filename = `droitis-fiche-${institutionSlug}-${courseSlug}.docx`;
-
       const a = document.createElement("a");
       a.href = url;
-      a.download = filename;
+      a.download = "droitis-case-reader.docx";
       document.body.appendChild(a);
       a.click();
       a.remove();
-
       URL.revokeObjectURL(url);
     } catch (e: any) {
       setError(String(e?.message ?? e));
@@ -204,65 +208,70 @@ export default function CaseReaderPage() {
 
   return (
     <div style={{ maxWidth: 980, margin: "0 auto", padding: 24 }}>
-      <h1>Case Reader</h1>
-      <p style={{ opacity: 0.8 }}>
-        Dépose un PDF/DOCX ou colle un extrait (avec paragraphes si possible). Si l’extrait est trop vague, Droitis pose 1–3 questions.
+      <h1 style={{ marginTop: 0 }}>Droitis — Case Reader</h1>
+
+      <p style={{ opacity: 0.85 }}>
+        Analyse une décision <b>uniquement via PDF ou DOCX</b>. Après extraction, la génération démarre automatiquement.
       </p>
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-        <label>
-          Output&nbsp;
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <label style={{ display: "grid", gap: 6 }}>
+          output_mode
           <select value={outputMode} onChange={(e) => setOutputMode(e.target.value as any)}>
-            <option value="analyse_longue">Analyse longue</option>
-            <option value="fiche">Fiche (DOCX)</option>
+            <option value="fiche">fiche</option>
+            <option value="analyse_longue">analyse_longue</option>
           </select>
         </label>
 
-        <label>
-          institution_slug&nbsp;
+        <label style={{ display: "grid", gap: 6 }}>
+          institution_slug
           <input value={institutionSlug} onChange={(e) => setInstitutionSlug(e.target.value)} />
         </label>
 
-        <label>
-          course_slug&nbsp;
+        <label style={{ display: "grid", gap: 6 }}>
+          course_slug
           <input value={courseSlug} onChange={(e) => setCourseSlug(e.target.value)} />
         </label>
+      </div>
 
-        <button onClick={onGenerate} disabled={loading || caseText.trim().length === 0}>
-          {loading ? "Génération..." : "Générer"}
+      <div style={{ marginTop: 16, padding: 16, border: "1px solid #333", borderRadius: 12 }}>
+        <label style={{ display: "grid", gap: 8 }}>
+          <b>Fichier (PDF ou DOCX)</b>
+          <input
+            type="file"
+            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
+        </label>
+
+        <button onClick={analyzeFile} disabled={loading || !file} style={{ marginTop: 12 }}>
+          {loading ? "Analyse en cours..." : "Analyser le fichier"}
         </button>
 
-        <button onClick={onDownloadDocx} disabled={!canDownload || downloading}>
+        <button onClick={onDownloadDocx} disabled={!canDownload || downloading} style={{ marginLeft: 10 }}>
           {downloading ? "Téléchargement..." : "Télécharger (.docx)"}
         </button>
 
-        {status !== null && <span style={{ opacity: 0.8 }}>STATUS: {status}</span>}
-        {error && <span style={{ color: "crimson", whiteSpace: "pre-wrap" }}>{error}</span>}
-      </div>
+        {status != null && (
+          <div style={{ marginTop: 12, opacity: 0.85 }}>
+            Status: <b>{status}</b>
+          </div>
+        )}
 
-      {/* Upload + extraction */}
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-        <input
-          type="file"
-          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        />
-        <button onClick={onExtractFile} disabled={!file || loading}>
-          {loading ? "Extraction..." : "Extraire le texte"}
-        </button>
-        {file && (
-          <span style={{ opacity: 0.8 }}>
-            Fichier: {file.name} ({Math.round(file.size / 1024)} KB)
-          </span>
+        {error && (
+          <pre
+            style={{
+              marginTop: 12,
+              padding: 12,
+              background: "#1b1b1b",
+              borderRadius: 8,
+              whiteSpace: "pre-wrap"
+            }}
+          >
+            {error}
+          </pre>
         )}
       </div>
-
-      <textarea
-        value={caseText}
-        onChange={(e) => setCaseText(e.target.value)}
-        placeholder="Colle ici la décision ou un extrait…"
-        style={{ width: "100%", minHeight: 220, padding: 12, fontFamily: "inherit" }}
-      />
 
       <hr style={{ margin: "24px 0" }} />
 
@@ -270,120 +279,168 @@ export default function CaseReaderPage() {
 
       {data?.type === "clarify" && (
         <div>
-          <h2>Informations manquantes</h2>
-          <ol>
-            {(data.clarification_questions ?? []).map((q: string, idx: number) => (
-              <li key={idx}>{q}</li>
+          <h2>Besoin de précisions (clarify)</h2>
+          <ul>
+            {(data.clarification_questions ?? []).map((q, i) => (
+              <li key={i}>{q}</li>
             ))}
-          </ol>
-          <p style={{ opacity: 0.8 }}>
-            👉 Ajoute ces infos dans le texte (ou colle un extrait plus complet) puis relance.
-          </p>
+          </ul>
+
+          <details style={{ marginTop: 12 }}>
+            <summary>JSON brut</summary>
+            <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(data, null, 2)}</pre>
+          </details>
         </div>
       )}
 
       {data?.type === "answer" && (
-        <div>
-          <h2>Fiche / Analyse</h2>
-
-          <h3>1) Contexte</h3>
-          <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(data.context, null, 2)}</pre>
-
-          <h3>2) Faits essentiels</h3>
-          <p>{safeStr(data.facts?.summary)}</p>
-          <ul>
-            {(data.facts?.key_facts ?? []).map((kf: any, i: number) => (
-              <li key={i}>
-                {safeStr(kf.fact)} <span style={{ opacity: 0.7 }}>({safeStr(kf.importance)})</span>
-              </li>
-            ))}
-          </ul>
-
-          <h3>3) Question(s) en litige</h3>
-          <ul>
-            {(data.issues ?? []).map((iss: string, i: number) => (
-              <li key={i}>{iss}</li>
-            ))}
-          </ul>
-
-          <h3>4) Règle / Test</h3>
-          <h4>Règles</h4>
-          <ul>
-            {(data.rule_test?.rules ?? []).map((r: any, i: number) => (
-              <li key={i}>{safeStr(r.rule)}</li>
-            ))}
-          </ul>
-
-          <h4>Tests</h4>
-          <ul>
-            {(data.rule_test?.tests ?? []).map((t: any, i: number) => (
-              <li key={i}>
-                <b>{safeStr(t.name)}:</b> {(t.steps ?? []).join(" · ")}
-              </li>
-            ))}
-          </ul>
-
-          <h3>5) Application / Raisonnement</h3>
-          <ul>
-            {(data.application_reasoning?.structured_application ?? []).map((s: any, i: number) => (
-              <li key={i}>
-                <b>{safeStr(s.step)}</b> — {safeStr(s.analysis)}
-              </li>
-            ))}
-          </ul>
-          <p>
-            <b>Ratio / résultat:</b> {safeStr(data.application_reasoning?.ratio_or_result)}
-          </p>
-
-          <h3>6) Portée (cours) + En examen</h3>
-          <p>
-            <b>Cours:</b> {safeStr(data.scope_for_course?.course)}
-          </p>
-          <p>{safeStr(data.scope_for_course?.what_it_changes)}</p>
-          <div style={{ padding: 12, border: "1px solid #444", borderRadius: 8 }}>
-            <p>
-              <b>En examen, si tu vois…</b> {safeStr(data.scope_for_course?.exam_spotting_box?.trigger)}
+        <div style={{ display: "grid", gap: 18 }}>
+          {/* 6) Portée en PREMIER */}
+          <div style={{ padding: 16, border: "1px solid #444", borderRadius: 12 }}>
+            <h2 style={{ marginTop: 0 }}>6) Portée (cours) + En examen</h2>
+            <p style={{ marginTop: 6 }}>
+              <b>Cours:</b> {safeStr(data.scope_for_course?.course)}
             </p>
-            <p>
-              <b>Fais ça:</b>
-            </p>
+            <p style={{ marginTop: 6 }}>{safeStr(data.scope_for_course?.what_it_changes)}</p>
+
+            <div style={{ padding: 12, border: "1px solid #555", borderRadius: 10 }}>
+              <p style={{ marginTop: 0, marginBottom: 8 }}>
+                <b>En examen, si tu vois…</b>
+              </p>
+              <p style={{ marginTop: 0 }}>{safeStr(data.scope_for_course?.exam_spotting_box?.trigger)}</p>
+
+              <p style={{ marginBottom: 6 }}>
+                <b>Fais ça</b>
+              </p>
+              <ul style={{ marginTop: 0 }}>
+                {(data.scope_for_course?.exam_spotting_box?.do_this ?? []).map((x: string, i: number) => (
+                  <li key={i}>{x}</li>
+                ))}
+              </ul>
+
+              <p style={{ marginBottom: 6 }}>
+                <b>Pièges</b>
+              </p>
+              <ul style={{ marginTop: 0 }}>
+                {(data.scope_for_course?.exam_spotting_box?.pitfalls ?? []).map((x: string, i: number) => (
+                  <li key={i}>{x}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          {/* 1) Contexte */}
+          <div>
+            <h2>1) Contexte</h2>
+            <pre style={{ whiteSpace: "pre-wrap", opacity: 0.95 }}>{formatContextAsText(data.context)}</pre>
+          </div>
+
+          {/* 2) Faits essentiels */}
+          <div>
+            <h2>2) Faits essentiels</h2>
+            <p>{safeStr(data.facts?.summary)}</p>
             <ul>
-              {(data.scope_for_course?.exam_spotting_box?.do_this ?? []).map((x: string, i: number) => (
-                <li key={i}>{x}</li>
-              ))}
-            </ul>
-            <p>
-              <b>Pièges:</b>
-            </p>
-            <ul>
-              {(data.scope_for_course?.exam_spotting_box?.pitfalls ?? []).map((x: string, i: number) => (
-                <li key={i}>{x}</li>
+              {(data.facts?.key_facts ?? []).map((f: any, i: number) => (
+                <li key={i}>
+                  <b>{safeStr(f.importance)}</b> — {safeStr(f.fact)}
+                </li>
               ))}
             </ul>
           </div>
 
-          <h3>7) Takeaways</h3>
-          <ul>
-            {(data.takeaways ?? []).map((t: string, i: number) => (
-              <li key={i}>{t}</li>
-            ))}
-          </ul>
+          {/* 3) Issues */}
+          <div>
+            <h2>3) Question(s) en litige</h2>
+            <ul>
+              {(data.issues ?? []).map((x: any, i: number) => (
+                <li key={i}>{safeStr(x)}</li>
+              ))}
+            </ul>
+          </div>
 
-          <h3>Anchors (preuves d’ancrage)</h3>
-          <ul>
-            {(data.anchors ?? []).map((a: any, i: number) => (
-              <li key={i}>
-                <b>{safeStr(a.id)}</b> — {safeStr(a.anchor_type)} — {safeStr(a.location)} — “
-                {safeStr(a.evidence_snippet)}”
-              </li>
-            ))}
-          </ul>
+          {/* 4) Règle / Test */}
+          <div>
+            <h2>4) Règle / test</h2>
+            <p>{safeStr(data.rule_test?.rule_summary)}</p>
 
-          <details style={{ marginTop: 16 }}>
-            <summary>Voir JSON brut</summary>
-            <pre style={{ whiteSpace: "pre-wrap", padding: 12, background: "#111", color: "#eee" }}>
-              {JSON.stringify(data, null, 2)}
-            </pre>
+            {Array.isArray(data.rule_test?.test_steps) && data.rule_test.test_steps.length > 0 && (
+              <>
+                <h3>Étapes du test</h3>
+                <ol>
+                  {data.rule_test.test_steps.map((s: any, i: number) => (
+                    <li key={i}>
+                      <b>{safeStr(s.step)}</b> — {safeStr(s.details)}
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+
+            {Array.isArray(data.rule_test?.cited_articles) && data.rule_test.cited_articles.length > 0 && (
+              <>
+                <h3>Articles cités (si présents dans le texte)</h3>
+                <ul>
+                  {data.rule_test.cited_articles.map((a: any, i: number) => (
+                    <li key={i}>
+                      <b>{safeStr(a.article)}</b> — {safeStr(a.explanation)}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+
+          {/* 5) Application / Raisonnement */}
+          <div>
+            <h2>5) Application / raisonnement</h2>
+            <p>{safeStr(data.application_reasoning?.reasoning_summary)}</p>
+
+            {Array.isArray(data.application_reasoning?.structured_application) && (
+              <ul>
+                {data.application_reasoning.structured_application.map((s: any, i: number) => (
+                  <li key={i}>
+                    <b>{safeStr(s.step)}</b> — {safeStr(s.analysis)}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <p>
+              <b>Ratio / résultat:</b> {safeStr(data.application_reasoning?.ratio_or_result)}
+            </p>
+          </div>
+
+          {/* 7) Takeaways */}
+          <div>
+            <h2>7) Ce que Droitis doit retenir</h2>
+            <ul>
+              {(data.takeaways ?? []).map((t: any, i: number) => (
+                <li key={i}>{safeStr(t)}</li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Anchors */}
+          <div>
+            <h2>Anchors (preuves d’ancrage)</h2>
+            <ul>
+              {(data.anchors ?? []).map((a: any, i: number) => (
+                <li key={i}>
+                  <b>{safeStr(a.id)}</b> — <b>{safeStr(a.anchor_type)}</b> — {safeStr(a.location)} — “
+                  {safeStr(a.evidence_snippet)}” ({safeStr(a.confidence)})
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <details>
+            <summary>JSON brut</summary>
+            <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(data, null, 2)}</pre>
+          </details>
+
+          <details>
+            <summary>Texte extrait (debug)</summary>
+            <pre style={{ whiteSpace: "pre-wrap" }}>{extractedText}</pre>
           </details>
         </div>
       )}

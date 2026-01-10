@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
 import Ajv2020 from "ajv/dist/2020";
+import { findBestCodificationMatch } from "@/lib/case-reader/codification";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -89,6 +90,8 @@ type InputBody = {
   jurisdiction_hint?: string;
   court_hint?: string;
   decision_date_hint?: string;
+  source_kind?: "pdf" | "docx";
+  filename?: string;
 };
 
 function extractOutputText(respJson: any): string | null {
@@ -107,11 +110,15 @@ function extractOutputText(respJson: any): string | null {
   return text || null;
 }
 
-function buildDeveloperPrompt() {
+function buildDeveloperPrompt(extra: string[] = []) {
   return [
     "TU ES DROITIS — MODE CASE READER (PHASE 4C).",
     "",
-    "OBJECTIF: produire une fiche ou une analyse longue UTILISABLE EN EXAMEN.",
+    "OBJECTIF: produire une fiche ou une analyse longue UTILISABLE EN EXAMEN.
+
+EXIGENCE DE DÉTAIL:
+- Chaque point (faits, issues, règles/tests, application, takeaways) doit être substantiel: éviter les puces d'une seule phrase.
+- Pour chaque point important, ajoute (1) ce que ça veut dire, (2) pourquoi ça compte, (3) conséquence pratique en examen (quand applicable).",
     "",
     "RÈGLES NON NÉGOCIABLES:",
     "1) Tu n’inventes rien sur la décision. Tout doit être ancré dans le texte fourni.",
@@ -331,6 +338,13 @@ export async function POST(req: Request) {
     if (!body?.case_text || !body?.output_mode) {
       return NextResponse.json({ error: "Missing case_text or output_mode" }, { status: 400, headers: CORS_HEADERS });
     }
+    // Upload-only enforcement (UI + API): this endpoint expects text extracted from a PDF/DOCX.
+    if (body.source_kind !== "pdf" && body.source_kind !== "docx") {
+      return NextResponse.json(
+        { error: "Upload requis: fournissez un PDF ou DOCX (source_kind='pdf'|'docx')." },
+        { status: 400, headers: CORS_HEADERS }
+      );
+    }
 
     if (body.case_text.length > MAX_CASE_TEXT_CHARS) {
       return NextResponse.json(
@@ -339,7 +353,25 @@ export async function POST(req: Request) {
       );
     }
 
-    const developer = buildDeveloperPrompt();
+    const codMatch = findBestCodificationMatch(body.case_text);
+    const codificationExtra: string[] = [];
+    if (codMatch) {
+      const r = codMatch.record;
+      codificationExtra.push(
+        "NOTE INTERNE (SOURCE AUTORISÉE — TABLE DE CODIFICATION JURISPRUDENTIELLE):",
+        `- Décision détectée: ${r.decision}${r.citation ? ` — ${r.citation}` : ""}`,
+        `- Codifiée à: ${r.codification_articles || "[non précisé]"}`,
+        r.recommended_mention ? `- Mention recommandée (Droitis): ${r.recommended_mention}` : "",
+        r.principle ? `- Principe ciblé: ${r.principle}` : "",
+        "",
+        "INSTRUCTIONS SPÉCIALES:",
+        "A) Tu dois mentionner explicitement cette codification dans la section 6 (Portée + En examen), en précisant que c'est 'codifié' et en citant les articles.",
+        "B) Ne prétends pas que cette codification provient du texte de la décision; c'est une information de table interne (source autorisée).",
+        "C) Ajoute un piège en examen: 'oublier de mentionner la codification (enseignants le demandent)'."
+      );
+    }
+    const developer = buildDeveloperPrompt(codificationExtra);
+
     const userPayload = {
       case_text: body.case_text,
       output_mode: body.output_mode,
