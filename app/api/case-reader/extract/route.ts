@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import "@napi-rs/canvas";
 import mammoth from "mammoth";
 
 export const runtime = "nodejs";
