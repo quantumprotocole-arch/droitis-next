@@ -1,41 +1,48 @@
-// lib/case-reader/pdfText.client.ts
-// Client-only: PDF text extraction using pdfjs-dist with NO worker.
+"use client";
 
-import * as pdfjsDist from "pdfjs-dist";
+// lib/case-reader/pdfText.client.ts
+// Client-only PDF text extraction. Important: pdfjs-dist must NOT be imported at module top-level,
+// otherwise Next prerender/Node may execute it and crash on DOMMatrix.
 
 type PdfJsAny = any;
 
-function getPdfJs(): PdfJsAny {
-  // pdfjs-dist peut exporter soit en named exports, soit via default selon le bundler
-  const m: PdfJsAny = (pdfjsDist as any);
-  const pdfjs: PdfJsAny = m?.getDocument ? m : (m?.default ?? m);
+let cachedPdfJs: PdfJsAny | null = null;
+
+async function loadPdfJs(): Promise<PdfJsAny> {
+  // Prevent accidental server/Node execution (build/prerender)
+  if (typeof window === "undefined") {
+    throw new Error("PDF extraction is browser-only (window is undefined).");
+  }
+
+  if (cachedPdfJs) return cachedPdfJs;
+
+  // ✅ Dynamic import inside function => not executed during build/prerender
+  const mod: any = await import("pdfjs-dist");
+  const pdfjs: any = mod?.getDocument ? mod : (mod?.default ?? mod);
 
   if (!pdfjs?.getDocument) {
-    // Message clair pour debug
     const keys = Object.keys(pdfjs ?? {});
     throw new Error(
-      "pdfjs-dist chargé mais getDocument est introuvable. " +
-        "Exports disponibles: " +
-        keys.slice(0, 30).join(", ")
+      "pdfjs-dist chargé mais getDocument introuvable. Exports: " + keys.slice(0, 40).join(", ")
     );
   }
 
-  // On évite tout worker (important pour Next/Vercel)
+  // ✅ Avoid worker usage (prevents worker-related build issues)
   if (pdfjs?.GlobalWorkerOptions) {
-    // on met une valeur vide, et surtout on passe disableWorker: true plus bas
     pdfjs.GlobalWorkerOptions.workerSrc = "";
   }
 
+  cachedPdfJs = pdfjs;
   return pdfjs;
 }
 
 export async function extractPdfTextFromFile(file: File): Promise<string> {
-  const pdfjs = getPdfJs();
+  const pdfjs = await loadPdfJs();
 
   const ab = await file.arrayBuffer();
   const data = new Uint8Array(ab);
 
-  // ✅ IMPORTANT: disableWorker évite d’embarquer/charger pdf.worker.mjs
+  // ✅ disableWorker is critical for stability in Next/Vercel
   const loadingTask = pdfjs.getDocument({ data, disableWorker: true });
   const pdf = await loadingTask.promise;
 
