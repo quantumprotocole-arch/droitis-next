@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { extractPdfTextFromFile } from "@/lib/case-reader/pdfText.client";
+export const dynamic = "force-dynamic";
+
 
 type Clarify = {
   type: "clarify";
