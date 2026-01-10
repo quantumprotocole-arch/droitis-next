@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { extractPdfTextFromFile } from "@/lib/case-reader/pdfText.client";
 
 type Clarify = {
   type: "clarify";
@@ -31,14 +32,32 @@ function safeStr(x: any) {
   return String(x);
 }
 
+function isPdfFile(file: File) {
+  const name = (file.name || "").toLowerCase();
+  const type = (file.type || "").toLowerCase();
+  return type === "application/pdf" || name.endsWith(".pdf");
+}
+
+function isDocxFile(file: File) {
+  const name = (file.name || "").toLowerCase();
+  const type = (file.type || "").toLowerCase();
+  return (
+    type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    name.endsWith(".docx")
+  );
+}
+
 export default function CaseReaderPage() {
   const [caseText, setCaseText] = useState("");
   const [outputMode, setOutputMode] = useState<"fiche" | "analyse_longue">("analyse_longue");
   const [institutionSlug, setInstitutionSlug] = useState("udes");
   const [courseSlug, setCourseSlug] = useState("obligations-1");
+
   const [file, setFile] = useState<File | null>(null);
+
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
+
   const [status, setStatus] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<Output | null>(null);
@@ -47,28 +66,63 @@ export default function CaseReaderPage() {
     return data && data.type === "answer";
   }, [data]);
 
-async function onExtractFile() {
-  if (!file) return;
-  setLoading(true);
-  setError(null);
+  async function onExtractFile() {
+    if (!file) return;
+    setLoading(true);
+    setError(null);
+    setStatus(null);
+    setData(null); // on efface l’ancienne sortie si on change le texte
 
-  try {
-    const fd = new FormData();
-    fd.append("file", file);
+    try {
+      // ✅ 1) PDF => extraction côté client (évite canvas sur Vercel)
+      if (isPdfFile(file)) {
+        const text = await extractPdfTextFromFile(file);
 
-    const res = await fetch("/api/case-reader/extract", { method: "POST", body: fd });
-    const text = await res.text();
-    const json = JSON.parse(text);
+        // Heuristique "PDF scanné" : trop peu de caractères non-espace
+        const compact = text.replace(/\s+/g, "");
+        if (compact.length < 200) {
+          throw new Error(
+            "Ce PDF semble être un scan (image) : il ne contient pas de texte sélectionnable.\n\n" +
+              "Solutions :\n" +
+              "• Exporter la décision en PDF texte (depuis Word/CanLII/éditeur) ou utiliser un DOCX\n" +
+              "• Ou copier-coller le texte directement dans la zone\n"
+          );
+        }
 
-    if (!res.ok) throw new Error(json?.error ?? `Extraction error (${res.status})`);
+        setCaseText(text);
+        return;
+      }
 
-    setCaseText(json.extracted_text ?? "");
-  } catch (e: any) {
-    setError(String(e?.message ?? e));
-  } finally {
-    setLoading(false);
+      // ✅ 2) DOCX => extraction côté serveur (ça marche déjà)
+      if (isDocxFile(file)) {
+        const fd = new FormData();
+        fd.append("file", file);
+
+        const res = await fetch("/api/case-reader/extract", { method: "POST", body: fd });
+        setStatus(res.status);
+
+        const text = await res.text();
+        let json: any;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          throw new Error("Réponse non-JSON (extract): " + text.slice(0, 300));
+        }
+
+        if (!res.ok) throw new Error(json?.error ?? `Extraction error (${res.status})`);
+
+        setCaseText(json.extracted_text ?? "");
+        return;
+      }
+
+      throw new Error("Format non supporté. Utilise un fichier .pdf ou .docx.");
+    } catch (e: any) {
+      setError(String(e?.message ?? e));
+    } finally {
+      setLoading(false);
+    }
   }
-}
+
   async function onGenerate() {
     setLoading(true);
     setError(null);
@@ -150,7 +204,7 @@ async function onExtractFile() {
     <div style={{ maxWidth: 980, margin: "0 auto", padding: 24 }}>
       <h1>Case Reader</h1>
       <p style={{ opacity: 0.8 }}>
-        Colle un extrait de décision (avec paragraphes si possible). Si l’extrait est trop vague, Droitis va poser 1–3 questions.
+        Dépose un PDF/DOCX ou colle un extrait (avec paragraphes si possible). Si l’extrait est trop vague, Droitis pose 1–3 questions.
       </p>
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
@@ -181,18 +235,25 @@ async function onExtractFile() {
         </button>
 
         {status !== null && <span style={{ opacity: 0.8 }}>STATUS: {status}</span>}
-        {error && <span style={{ color: "crimson" }}>{error}</span>}
+        {error && <span style={{ color: "crimson", whiteSpace: "pre-wrap" }}>{error}</span>}
       </div>
-<div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-  <input
-    type="file"
-    accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-  />
-  <button onClick={onExtractFile} disabled={!file || loading}>
-    {loading ? "Extraction..." : "Extraire le texte"}
-  </button>
-</div>
+
+      {/* Upload + extraction */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        <input
+          type="file"
+          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        />
+        <button onClick={onExtractFile} disabled={!file || loading}>
+          {loading ? "Extraction..." : "Extraire le texte"}
+        </button>
+        {file && (
+          <span style={{ opacity: 0.8 }}>
+            Fichier: {file.name} ({Math.round(file.size / 1024)} KB)
+          </span>
+        )}
+      </div>
 
       <textarea
         value={caseText}
@@ -268,20 +329,30 @@ async function onExtractFile() {
               </li>
             ))}
           </ul>
-          <p><b>Ratio / résultat:</b> {safeStr(data.application_reasoning?.ratio_or_result)}</p>
+          <p>
+            <b>Ratio / résultat:</b> {safeStr(data.application_reasoning?.ratio_or_result)}
+          </p>
 
           <h3>6) Portée (cours) + En examen</h3>
-          <p><b>Cours:</b> {safeStr(data.scope_for_course?.course)}</p>
+          <p>
+            <b>Cours:</b> {safeStr(data.scope_for_course?.course)}
+          </p>
           <p>{safeStr(data.scope_for_course?.what_it_changes)}</p>
           <div style={{ padding: 12, border: "1px solid #444", borderRadius: 8 }}>
-            <p><b>En examen, si tu vois…</b> {safeStr(data.scope_for_course?.exam_spotting_box?.trigger)}</p>
-            <p><b>Fais ça:</b></p>
+            <p>
+              <b>En examen, si tu vois…</b> {safeStr(data.scope_for_course?.exam_spotting_box?.trigger)}
+            </p>
+            <p>
+              <b>Fais ça:</b>
+            </p>
             <ul>
               {(data.scope_for_course?.exam_spotting_box?.do_this ?? []).map((x: string, i: number) => (
                 <li key={i}>{x}</li>
               ))}
             </ul>
-            <p><b>Pièges:</b></p>
+            <p>
+              <b>Pièges:</b>
+            </p>
             <ul>
               {(data.scope_for_course?.exam_spotting_box?.pitfalls ?? []).map((x: string, i: number) => (
                 <li key={i}>{x}</li>
@@ -300,7 +371,8 @@ async function onExtractFile() {
           <ul>
             {(data.anchors ?? []).map((a: any, i: number) => (
               <li key={i}>
-                <b>{safeStr(a.id)}</b> — {safeStr(a.anchor_type)} — {safeStr(a.location)} — “{safeStr(a.evidence_snippet)}”
+                <b>{safeStr(a.id)}</b> — {safeStr(a.anchor_type)} — {safeStr(a.location)} — “
+                {safeStr(a.evidence_snippet)}”
               </li>
             ))}
           </ul>
