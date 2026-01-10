@@ -130,6 +130,45 @@ function buildDeveloperPrompt() {
     "SORTIE: JSON UNIQUEMENT, conforme au schéma. Aucun texte hors JSON."
   ].join("\n");
 }
+const ANCHOR_ID_RE = /^[A-Z]{1,4}-\d{1,4}$/;
+
+function sanitizeAnchorIds(obj: any) {
+  if (!obj || typeof obj !== "object") return;
+
+  if (Array.isArray(obj.anchors)) {
+    let i = 1;
+    for (const a of obj.anchors) {
+      if (!a || typeof a !== "object") continue;
+      const id = typeof a.id === "string" ? a.id : "";
+      if (!ANCHOR_ID_RE.test(id)) {
+        a.id = `A-${i}`; // pattern OK
+      }
+      i += 1;
+    }
+  }
+}
+
+/**
+ * En mode clarify, on renvoie un objet minimal conforme au schema canonical,
+ * pour éviter que des champs optionnels invalides fassent échouer Ajv.
+ */
+function normalizeClarify(parsed: any) {
+  const qs = Array.isArray(parsed?.clarification_questions)
+    ? parsed.clarification_questions.slice(0, 3)
+    : [];
+
+  // fallback si le modèle n’en met pas (rare)
+  const safeQs =
+    qs.length > 0
+      ? qs
+      : ["Peux-tu fournir un extrait de la décision (avec paragraphes) ?"];
+
+  return {
+    type: "clarify",
+    output_mode: parsed?.output_mode === "analyse_longue" ? "analyse_longue" : "fiche",
+    clarification_questions: safeQs
+  };
+}
 
 function containsForbiddenUrlLikeStrings(obj: any): { found: boolean; sample?: string } {
   const needles = ["http://", "https://", "www.", "canlii", ".com", ".net", ".org"];
@@ -298,6 +337,16 @@ export async function POST(req: Request) {
           { status: 502, headers: CORS_HEADERS }
         );
       }
+          // Si le modèle répond "clarify", on renvoie une version MINIMALE
+    // (sinon Ajv peut échouer sur des champs optionnels contraints, ex anchors.id)
+    if (parsed?.type === "clarify") {
+      const minimal = normalizeClarify(parsed);
+      return NextResponse.json(minimal, { status: 200, headers: CORS_HEADERS });
+    }
+
+    // Sinon (answer), on assainit les anchor IDs pour éviter un échec pattern Ajv
+    sanitizeAnchorIds(parsed);
+
       const raw2 = extractOutputText(r2.json);
       if (!raw2) {
         return NextResponse.json(
