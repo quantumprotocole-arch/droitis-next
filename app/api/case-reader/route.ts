@@ -16,12 +16,14 @@ const CORS_HEADERS: Record<string, string> = {
   "access-control-allow-headers": "Content-Type, Authorization",
 };
 
-// --- Config robustesse ---
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS ?? 60000);
 const MAX_CASE_TEXT_CHARS = Number(process.env.MAX_CASE_TEXT_CHARS ?? 120_000);
 
-// --- Schema : canonical (pour Ajv) + schema OpenAI (subset compatible) ---
+// Limites de “repair” pour éviter les 400 “request too large”
+const MAX_REPAIR_RAW_CHARS = Number(process.env.MAX_REPAIR_RAW_CHARS ?? 25_000);
+const MAX_REPAIR_ERR_CHARS = Number(process.env.MAX_REPAIR_ERR_CHARS ?? 8_000);
+
 const schemaPath = path.join(process.cwd(), "schemas", "case-reader-v2.schema.json");
 const canonicalSchema = JSON.parse(fs.readFileSync(schemaPath, "utf-8"));
 
@@ -59,7 +61,7 @@ function toOpenAISchema(node: any): any {
   if (out.type === "object" && out.properties && typeof out.properties === "object") {
     out.additionalProperties = false;
 
-    // Conserver required si présent, sinon ne pas l’inventer
+    // Conserver required si présent; sinon ne pas inventer
     if (Array.isArray((node as any).required)) {
       const req = (node as any).required.filter((k: any) => typeof k === "string");
       const props = new Set(Object.keys(out.properties));
@@ -80,7 +82,6 @@ function toOpenAISchema(node: any): any {
 
 const openaiSchema = toOpenAISchema(canonicalSchema);
 
-// --- Ajv validator sur le schema COMPLET (canonical) ---
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 const validate = ajv.compile(canonicalSchema);
 
@@ -154,30 +155,15 @@ const ANCHOR_ID_RE = /^[A-Z]{1,4}-\d{1,4}$/;
 
 function sanitizeAnchorIds(obj: any) {
   if (!obj || typeof obj !== "object") return;
+  if (!Array.isArray(obj.anchors)) return;
 
-  if (Array.isArray(obj.anchors)) {
-    let i = 1;
-    for (const a of obj.anchors) {
-      if (!a || typeof a !== "object") continue;
-      const id = typeof a.id === "string" ? a.id : "";
-      if (!ANCHOR_ID_RE.test(id)) a.id = `A-${i}`;
-      i += 1;
-    }
+  let i = 1;
+  for (const a of obj.anchors) {
+    if (!a || typeof a !== "object") continue;
+    const id = typeof a.id === "string" ? a.id : "";
+    if (!ANCHOR_ID_RE.test(id)) a.id = `A-${i}`;
+    i += 1;
   }
-}
-
-function normalizeClarify(parsed: any) {
-  const qs = Array.isArray(parsed?.clarification_questions)
-    ? parsed.clarification_questions.slice(0, 3)
-    : [];
-  const safeQs =
-    qs.length > 0 ? qs : ["Peux-tu fournir un extrait plus complet (idéalement avec numéros de paragraphes/pages) ?"];
-
-  return {
-    type: "clarify",
-    output_mode: parsed?.output_mode === "analyse_longue" ? "analyse_longue" : "fiche",
-    clarification_questions: safeQs,
-  };
 }
 
 function redactUrls(s: string) {
@@ -222,6 +208,36 @@ function applyAnswerGuards(parsed: any) {
   sanitizeUrlsInOutput(parsed);
 }
 
+function normalizeClarify(parsed: any) {
+  const qs = Array.isArray(parsed?.clarification_questions)
+    ? parsed.clarification_questions.slice(0, 3)
+    : [];
+  const safeQs =
+    qs.length > 0
+      ? qs
+      : ["Peux-tu fournir un extrait plus complet (idéalement avec numéros de paragraphes/pages) ?"];
+
+  return {
+    type: "clarify",
+    output_mode: parsed?.output_mode === "analyse_longue" ? "analyse_longue" : "fiche",
+    clarification_questions: safeQs,
+  };
+}
+
+function safeJsonParse(raw: string): any | null {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function clampText(s: string, maxChars: number) {
+  const t = String(s ?? "");
+  if (t.length <= maxChars) return t;
+  return t.slice(0, maxChars) + "\n...[TRUNCATED]...";
+}
+
 async function callOpenAIResponses(payload: any): Promise<{ ok: boolean; status: number; json: any }> {
   if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY manquant");
 
@@ -246,22 +262,17 @@ async function callOpenAIResponses(payload: any): Promise<{ ok: boolean; status:
   }
 }
 
+// PRIMARY = on garde Structured Outputs (si ça passe)
 function buildPrimaryPayloadStructured(systemPrompt: string, userPayload: any) {
   return {
     model: MODEL,
     store: false,
+    temperature: 0,
     input: [
-      { role: "system", content: [{ type: "input_text", text: systemPrompt }] },
+      { role: "developer", content: [{ type: "input_text", text: systemPrompt }] },
       {
         role: "user",
-        content: [
-          {
-            type: "input_text",
-            text:
-              "Lis le texte fourni et produis la sortie JSON conforme au schéma.\n\n" +
-              JSON.stringify(userPayload),
-          },
-        ],
+        content: [{ type: "input_text", text: "Lis le texte fourni et produis la sortie JSON conforme au schéma.\n\n" + JSON.stringify(userPayload) }],
       },
     ],
     text: {
@@ -275,87 +286,38 @@ function buildPrimaryPayloadStructured(systemPrompt: string, userPayload: any) {
   };
 }
 
-/**
- * Fallback sans Structured Outputs (quand OpenAI refuse le payload/schema).
- * On demande du JSON uniquement, puis on parse et on valide avec AJV.
- */
-function buildPrimaryPayloadPlain(systemPrompt: string, userPayload: any) {
-  return {
-    model: MODEL,
-    store: false,
-    input: [
-      { role: "system", content: [{ type: "input_text", text: systemPrompt }] },
-      {
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text:
-              "Retourne UNIQUEMENT du JSON (aucun texte autour), conforme au schéma. Si info critique manque: type='clarify' + 1-3 questions.\n\n" +
-              JSON.stringify(userPayload),
-          },
-        ],
-      },
-    ],
-  };
-}
+// REPAIR = PAS de json_schema (évite 400 “invalid schema”), on valide ensuite avec AJV
+function buildRepairPayloadPlain(systemPrompt: string, raw: string, errors: any) {
+  const rawClamped = clampText(raw, MAX_REPAIR_RAW_CHARS);
+  const errClamped = clampText(JSON.stringify(errors ?? null), MAX_REPAIR_ERR_CHARS);
 
-function buildRepairPayload(systemPrompt: string, raw: string, errors: any) {
   return {
     model: MODEL,
     store: false,
+    temperature: 0,
     input: [
-      { role: "system", content: [{ type: "input_text", text: systemPrompt }] },
+      { role: "developer", content: [{ type: "input_text", text: systemPrompt }] },
       {
         role: "user",
         content: [
           {
             type: "input_text",
             text:
-              "Répare ce JSON pour qu'il soit conforme au schéma.\n" +
+              "Retourne UNIQUEMENT du JSON valide (aucun texte autour).\n" +
+              "Objectif: rendre le JSON conforme au schéma attendu.\n" +
               "Contraintes:\n" +
               "- Ne rajoute aucune information non présente.\n" +
-              "- Si une info critique manque: utilise type='clarify' et 1-3 questions.\n" +
+              "- Si info critique manque: type='clarify' et 1-3 questions.\n" +
               "- Ne mets jamais d'URL (http/https/www): remplace par '[LIEN SUPPRIMÉ]'.\n\n" +
               "JSON À RÉPARER:\n" +
-              raw +
-              "\n\nERREURS:\n" +
-              JSON.stringify(errors),
+              rawClamped +
+              "\n\nERREURS / INDICES:\n" +
+              errClamped,
           },
         ],
       },
     ],
-    text: {
-      format: {
-        type: "json_schema",
-        name: "droitis_case_reader_v2",
-        strict: true,
-        schema: openaiSchema,
-      },
-    },
   };
-}
-
-function safeJsonParse(raw: string): any | null {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function isLikelySchemaOrPayloadError(openaiJson: any): boolean {
-  const msg = String(openaiJson?.error?.message ?? "").toLowerCase();
-  // On ne devine pas la cause exacte; on ne fait que détecter des mots-clés.
-  return (
-    msg.includes("json_schema") ||
-    msg.includes("schema") ||
-    msg.includes("structured") ||
-    msg.includes("invalid") ||
-    msg.includes("unrecognized") ||
-    msg.includes("must be") ||
-    msg.includes("format")
-  );
 }
 
 export async function POST(req: Request) {
@@ -383,6 +345,7 @@ export async function POST(req: Request) {
       );
     }
 
+    // Codification note (source autorisée interne)
     const codMatch = findBestCodificationMatch(body.case_text);
     const codificationLines: string[] = [];
     if (codMatch) {
@@ -418,16 +381,9 @@ export async function POST(req: Request) {
       filename: body.filename,
     };
 
-    // ---- Primary (Structured) ----
-    let r1 = await callOpenAIResponses(buildPrimaryPayloadStructured(systemPrompt, userPayload));
-
-    // ✅ si OpenAI refuse le schema/payload, fallback plain (JSON demandé)
-    if (!r1.ok && r1.status === 400 && isLikelySchemaOrPayloadError(r1.json)) {
-      r1 = await callOpenAIResponses(buildPrimaryPayloadPlain(systemPrompt, userPayload));
-    }
-
+    // 1) Primary structured
+    const r1 = await callOpenAIResponses(buildPrimaryPayloadStructured(systemPrompt, userPayload));
     if (!r1.ok) {
-      // IMPORTANT: on propage le vrai status OpenAI au lieu de 502 systématique
       const status = Number.isFinite(r1.status) && r1.status >= 400 ? r1.status : 502;
       return NextResponse.json(
         { error: "OpenAI responses error", status: r1.status, resp: r1.json },
@@ -443,10 +399,12 @@ export async function POST(req: Request) {
       );
     }
 
+    // 2) Parse JSON
     let parsed: any | null = safeJsonParse(raw1);
 
+    // 3) Repair if parse failed (PLAIN)
     if (!parsed) {
-      const r2 = await callOpenAIResponses(buildRepairPayload(systemPrompt, raw1, { parse: "failed" }));
+      const r2 = await callOpenAIResponses(buildRepairPayloadPlain(systemPrompt, raw1, { parse: "failed" }));
       if (!r2.ok) {
         const status = Number.isFinite(r2.status) && r2.status >= 400 ? r2.status : 502;
         return NextResponse.json(
@@ -462,22 +420,26 @@ export async function POST(req: Request) {
 
       parsed = safeJsonParse(raw2);
       if (!parsed) {
-        return NextResponse.json({ error: "Repair output still not valid JSON", raw: raw2 }, { status: 502, headers: CORS_HEADERS });
+        return NextResponse.json({ error: "Repair output still not valid JSON", raw: clampText(raw2, 2000) }, { status: 502, headers: CORS_HEADERS });
       }
     }
 
+    // Clarify => sortie minimale
     if (parsed?.type === "clarify") {
       return NextResponse.json(normalizeClarify(parsed), { status: 200, headers: CORS_HEADERS });
     }
 
+    // Guards
     applyAnswerGuards(parsed);
 
+    // 4) AJV validate
     let ok = validate(parsed) as boolean;
     if (ok) {
       return NextResponse.json(parsed, { status: 200, headers: CORS_HEADERS });
     }
 
-    const r3 = await callOpenAIResponses(buildRepairPayload(systemPrompt, JSON.stringify(parsed), validate.errors));
+    // 5) Repair once if schema fails (PLAIN)
+    const r3 = await callOpenAIResponses(buildRepairPayloadPlain(systemPrompt, JSON.stringify(parsed), validate.errors));
     if (!r3.ok) {
       const status = Number.isFinite(r3.status) && r3.status >= 400 ? r3.status : 502;
       return NextResponse.json(
@@ -493,7 +455,7 @@ export async function POST(req: Request) {
 
     const parsed3 = safeJsonParse(raw3);
     if (!parsed3) {
-      return NextResponse.json({ error: "Repair output not valid JSON", raw: raw3 }, { status: 502, headers: CORS_HEADERS });
+      return NextResponse.json({ error: "Repair output not valid JSON", raw: clampText(raw3, 2000) }, { status: 502, headers: CORS_HEADERS });
     }
 
     if (parsed3?.type === "clarify") {
