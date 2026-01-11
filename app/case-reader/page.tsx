@@ -2,157 +2,179 @@
 
 import { useMemo, useState } from "react";
 import { extractPdfTextFromFile } from "@/lib/case-reader/pdfText.client";
-
 export const dynamic = "force-dynamic";
 
-function isPdfFile(f: File) {
-  const name = (f.name || "").toLowerCase();
-  const mime = (f.type || "").toLowerCase();
-  return mime === "application/pdf" || name.endsWith(".pdf");
+
+type Clarify = {
+  type: "clarify";
+  output_mode: "fiche" | "analyse_longue";
+  clarification_questions: string[];
+};
+
+type Answer = {
+  type: "answer";
+  output_mode: "fiche" | "analyse_longue";
+  meta: any;
+  context: any;
+  facts: any;
+  issues: string[];
+  rule_test: any;
+  application_reasoning: any;
+  scope_for_course: any;
+  takeaways: string[];
+  anchors: any[];
+  clarification_questions?: string[];
+};
+
+type Output = Clarify | Answer | any;
+
+function safeStr(x: any) {
+  if (x === null || x === undefined) return "";
+  if (typeof x === "string") return x;
+  return String(x);
 }
 
-function isDocxFile(f: File) {
-  const name = (f.name || "").toLowerCase();
-  const mime = (f.type || "").toLowerCase();
+function isPdfFile(file: File) {
+  const name = (file.name || "").toLowerCase();
+  const type = (file.type || "").toLowerCase();
+  return type === "application/pdf" || name.endsWith(".pdf");
+}
+
+function isDocxFile(file: File) {
+  const name = (file.name || "").toLowerCase();
+  const type = (file.type || "").toLowerCase();
   return (
-    mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
     name.endsWith(".docx")
   );
 }
 
 export default function CaseReaderPage() {
+  const [caseText, setCaseText] = useState("");
   const [outputMode, setOutputMode] = useState<"fiche" | "analyse_longue">("analyse_longue");
   const [institutionSlug, setInstitutionSlug] = useState("udes");
   const [courseSlug, setCourseSlug] = useState("obligations-1");
 
   const [file, setFile] = useState<File | null>(null);
-  const [sourceKind, setSourceKind] = useState<"pdf" | "docx" | null>(null);
 
-  const [extractedText, setExtractedText] = useState<string>("");
-  const [result, setResult] = useState<any | null>(null);
-
-  const [loadingExtract, setLoadingExtract] = useState(false);
-  const [loadingAnalyze, setLoadingAnalyze] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
   const [status, setStatus] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [errorDetails, setErrorDetails] = useState<any | null>(null);
+  const [data, setData] = useState<Output | null>(null);
 
-  const canAnalyze = useMemo(
-    () => extractedText.trim().length > 0 && !!sourceKind && !loadingAnalyze && !loadingExtract,
-    [extractedText, sourceKind, loadingAnalyze, loadingExtract]
-  );
-
-  const canDownload = useMemo(() => result?.type === "answer" && !downloading, [result, downloading]);
+  const canDownload = useMemo(() => {
+    return data && data.type === "answer";
+  }, [data]);
 
   async function onExtractFile() {
     if (!file) return;
-
-    setLoadingExtract(true);
+    setLoading(true);
     setError(null);
-    setErrorDetails(null);
     setStatus(null);
-
-    setExtractedText("");
-    setResult(null);
+    setData(null); // on efface l’ancienne sortie si on change le texte
 
     try {
+      // ✅ 1) PDF => extraction côté client (évite canvas sur Vercel)
       if (isPdfFile(file)) {
-        setSourceKind("pdf");
         const text = await extractPdfTextFromFile(file);
 
-        const nonSpace = (text || "").replace(/\s+/g, "");
-        if (nonSpace.length < 400) {
-          throw new Error("PDF probablement scanné (image-only): aucun texte exploitable détecté.");
+        // Heuristique "PDF scanné" : trop peu de caractères non-espace
+        const compact = text.replace(/\s+/g, "");
+        if (compact.length < 200) {
+          throw new Error(
+            "Ce PDF semble être un scan (image) : il ne contient pas de texte sélectionnable.\n\n" +
+              "Solutions :\n" +
+              "• Exporter la décision en PDF texte (depuis Word/CanLII/éditeur) ou utiliser un DOCX\n" +
+              "• Ou copier-coller le texte directement dans la zone\n"
+          );
         }
 
-        setExtractedText(text);
+        setCaseText(text);
         return;
       }
 
+      // ✅ 2) DOCX => extraction côté serveur (ça marche déjà)
       if (isDocxFile(file)) {
-        setSourceKind("docx");
         const fd = new FormData();
         fd.append("file", file);
 
         const res = await fetch("/api/case-reader/extract", { method: "POST", body: fd });
         setStatus(res.status);
 
-        const parsed = await res.json().catch(() => null);
-        if (!res.ok) {
-          setError(parsed?.error ?? "Extraction error");
-          setErrorDetails(parsed);
-          return;
+        const text = await res.text();
+        let json: any;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          throw new Error("Réponse non-JSON (extract): " + text.slice(0, 300));
         }
 
-        const t = String(parsed?.extracted_text ?? "");
-        if (!t.trim()) throw new Error("DOCX: texte vide après extraction.");
+        if (!res.ok) throw new Error(json?.error ?? `Extraction error (${res.status})`);
 
-        setExtractedText(t);
+        setCaseText(json.extracted_text ?? "");
         return;
       }
 
-      throw new Error("Format non supporté. Utilise .pdf ou .docx.");
+      throw new Error("Format non supporté. Utilise un fichier .pdf ou .docx.");
     } catch (e: any) {
       setError(String(e?.message ?? e));
     } finally {
-      setLoadingExtract(false);
+      setLoading(false);
     }
   }
 
-  async function onAnalyze() {
-    if (!canAnalyze) return;
-
-    setLoadingAnalyze(true);
+  async function onGenerate() {
+    setLoading(true);
     setError(null);
-    setErrorDetails(null);
+    setData(null);
     setStatus(null);
-    setResult(null);
 
     try {
       const res = await fetch("/api/case-reader", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          case_text: extractedText,
           output_mode: outputMode,
+          case_text: caseText,
           institution_slug: institutionSlug,
-          course_slug: courseSlug,
-          source_kind: sourceKind,
-          filename: file?.name ?? undefined,
-        }),
+          course_slug: courseSlug
+        })
       });
 
       setStatus(res.status);
-      const parsed = await res.json().catch(() => null);
+      const text = await res.text();
 
-      if (!res.ok) {
-        setError(parsed?.error ?? "Analyze error");
-        setErrorDetails(parsed);
-        return;
+      let json: any;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        throw new Error("Réponse non-JSON: " + text.slice(0, 300));
       }
 
-      setResult(parsed);
+      if (!res.ok) {
+        throw new Error(json?.error ?? `Erreur API (${res.status})`);
+      }
+
+      setData(json);
     } catch (e: any) {
       setError(String(e?.message ?? e));
     } finally {
-      setLoadingAnalyze(false);
+      setLoading(false);
     }
   }
 
   async function onDownloadDocx() {
-    if (!result || result?.type !== "answer") return;
-
+    if (!data || data.type !== "answer") return;
     setDownloading(true);
     setError(null);
-    setErrorDetails(null);
 
     try {
       const res = await fetch("/api/case-reader/docx", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ case_reader_output: result }),
+        body: JSON.stringify({ case_reader_output: data })
       });
 
       if (!res.ok) {
@@ -161,14 +183,18 @@ export default function CaseReaderPage() {
       }
 
       const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+
+      const filename = `droitis-fiche-${institutionSlug}-${courseSlug}.docx`;
+
       const a = document.createElement("a");
       a.href = url;
-      a.download = "droitis-fiche.docx";
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      window.URL.revokeObjectURL(url);
+
+      URL.revokeObjectURL(url);
     } catch (e: any) {
       setError(String(e?.message ?? e));
     } finally {
@@ -178,102 +204,189 @@ export default function CaseReaderPage() {
 
   return (
     <div style={{ maxWidth: 980, margin: "0 auto", padding: 24 }}>
-      <h1 style={{ fontSize: 28, fontWeight: 700 }}>Case Reader</h1>
-      <p style={{ opacity: 0.9 }}>
-        Flux: <b>Upload → Extraction → Analyse → Export DOCX</b>
+      <h1>Case Reader</h1>
+      <p style={{ opacity: 0.8 }}>
+        Dépose un PDF/DOCX ou colle un extrait (avec paragraphes si possible). Si l’extrait est trop vague, Droitis pose 1–3 questions.
       </p>
 
-      <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
         <label>
-          Output mode:{" "}
+          Output&nbsp;
           <select value={outputMode} onChange={(e) => setOutputMode(e.target.value as any)}>
-            <option value="fiche">fiche</option>
-            <option value="analyse_longue">analyse_longue</option>
+            <option value="analyse_longue">Analyse longue</option>
+            <option value="fiche">Fiche (DOCX)</option>
           </select>
         </label>
 
         <label>
-          Institution:{" "}
+          institution_slug&nbsp;
           <input value={institutionSlug} onChange={(e) => setInstitutionSlug(e.target.value)} />
         </label>
 
         <label>
-          Cours: <input value={courseSlug} onChange={(e) => setCourseSlug(e.target.value)} />
+          course_slug&nbsp;
+          <input value={courseSlug} onChange={(e) => setCourseSlug(e.target.value)} />
         </label>
 
-        <label>
-          Fichier (PDF ou DOCX) :{" "}
-          <input
-            type="file"
-            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            onChange={(e) => {
-              const f = e.target.files?.[0] ?? null;
-              setFile(f);
-              setExtractedText("");
-              setResult(null);
-              setError(null);
-              setErrorDetails(null);
-              setStatus(null);
-              setSourceKind(null);
-            }}
-          />
-        </label>
+        <button onClick={onGenerate} disabled={loading || caseText.trim().length === 0}>
+          {loading ? "Génération..." : "Générer"}
+        </button>
 
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <button onClick={onExtractFile} disabled={!file || loadingExtract}>
-            {loadingExtract ? "Extraction..." : "1) Extraire le texte"}
-          </button>
+        <button onClick={onDownloadDocx} disabled={!canDownload || downloading}>
+          {downloading ? "Téléchargement..." : "Télécharger (.docx)"}
+        </button>
 
-          <button onClick={onAnalyze} disabled={!canAnalyze}>
-            {loadingAnalyze ? "Analyse..." : "2) Analyser"}
-          </button>
+        {status !== null && <span style={{ opacity: 0.8 }}>STATUS: {status}</span>}
+        {error && <span style={{ color: "crimson", whiteSpace: "pre-wrap" }}>{error}</span>}
+      </div>
 
-          {canDownload && (
-            <button onClick={onDownloadDocx} disabled={!canDownload}>
-              {downloading ? "Téléchargement..." : "Télécharger (.docx)"}
-            </button>
-          )}
-        </div>
-
-        {status !== null && <div style={{ opacity: 0.8 }}>Status: {status}</div>}
-
-        {error && (
-          <div style={{ border: "1px solid #c33", padding: 12, borderRadius: 8 }}>
-            <b>Erreur:</b> {error}
-            {errorDetails?.openai_message && (
-              <div style={{ marginTop: 8 }}>
-                <b>OpenAI:</b> {String(errorDetails.openai_message)}
-              </div>
-            )}
-            <details style={{ marginTop: 8 }}>
-              <summary>Détails</summary>
-              <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(errorDetails, null, 2)}</pre>
-            </details>
-          </div>
-        )}
-
-        {extractedText && (
-          <details>
-            <summary>Texte extrait (lecture seule) — {extractedText.length.toLocaleString()} caractères</summary>
-            <pre style={{ whiteSpace: "pre-wrap", padding: 12, background: "#111", color: "#eee", borderRadius: 8 }}>
-              {extractedText.slice(0, 12000)}
-              {extractedText.length > 12000 ? "\n\n...[preview tronqué UI]..." : ""}
-            </pre>
-          </details>
-        )}
-
-        {result && (
-          <div style={{ border: "1px solid #444", padding: 16, borderRadius: 10 }}>
-            <h2 style={{ marginTop: 0 }}>Résultat</h2>
-            <details>
-              <summary>Voir JSON brut</summary>
-              <pre style={{ whiteSpace: "pre-wrap", padding: 12, background: "#111", color: "#eee" }}>
-                {JSON.stringify(result, null, 2)}
-              </pre>
-            </details>
-          </div>
+      {/* Upload + extraction */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        <input
+          type="file"
+          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        />
+        <button onClick={onExtractFile} disabled={!file || loading}>
+          {loading ? "Extraction..." : "Extraire le texte"}
+        </button>
+        {file && (
+          <span style={{ opacity: 0.8 }}>
+            Fichier: {file.name} ({Math.round(file.size / 1024)} KB)
+          </span>
         )}
       </div>
+
+      <textarea
+        value={caseText}
+        onChange={(e) => setCaseText(e.target.value)}
+        placeholder="Colle ici la décision ou un extrait…"
+        style={{ width: "100%", minHeight: 220, padding: 12, fontFamily: "inherit" }}
+      />
+
+      <hr style={{ margin: "24px 0" }} />
+
+      {!data && <p style={{ opacity: 0.7 }}>Aucun résultat pour le moment.</p>}
+
+      {data?.type === "clarify" && (
+        <div>
+          <h2>Informations manquantes</h2>
+          <ol>
+            {(data.clarification_questions ?? []).map((q: string, idx: number) => (
+              <li key={idx}>{q}</li>
+            ))}
+          </ol>
+          <p style={{ opacity: 0.8 }}>
+            👉 Ajoute ces infos dans le texte (ou colle un extrait plus complet) puis relance.
+          </p>
+        </div>
+      )}
+
+      {data?.type === "answer" && (
+        <div>
+          <h2>Fiche / Analyse</h2>
+
+          <h3>1) Contexte</h3>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(data.context, null, 2)}</pre>
+
+          <h3>2) Faits essentiels</h3>
+          <p>{safeStr(data.facts?.summary)}</p>
+          <ul>
+            {(data.facts?.key_facts ?? []).map((kf: any, i: number) => (
+              <li key={i}>
+                {safeStr(kf.fact)} <span style={{ opacity: 0.7 }}>({safeStr(kf.importance)})</span>
+              </li>
+            ))}
+          </ul>
+
+          <h3>3) Question(s) en litige</h3>
+          <ul>
+            {(data.issues ?? []).map((iss: string, i: number) => (
+              <li key={i}>{iss}</li>
+            ))}
+          </ul>
+
+          <h3>4) Règle / Test</h3>
+          <h4>Règles</h4>
+          <ul>
+            {(data.rule_test?.rules ?? []).map((r: any, i: number) => (
+              <li key={i}>{safeStr(r.rule)}</li>
+            ))}
+          </ul>
+
+          <h4>Tests</h4>
+          <ul>
+            {(data.rule_test?.tests ?? []).map((t: any, i: number) => (
+              <li key={i}>
+                <b>{safeStr(t.name)}:</b> {(t.steps ?? []).join(" · ")}
+              </li>
+            ))}
+          </ul>
+
+          <h3>5) Application / Raisonnement</h3>
+          <ul>
+            {(data.application_reasoning?.structured_application ?? []).map((s: any, i: number) => (
+              <li key={i}>
+                <b>{safeStr(s.step)}</b> — {safeStr(s.analysis)}
+              </li>
+            ))}
+          </ul>
+          <p>
+            <b>Ratio / résultat:</b> {safeStr(data.application_reasoning?.ratio_or_result)}
+          </p>
+
+          <h3>6) Portée (cours) + En examen</h3>
+          <p>
+            <b>Cours:</b> {safeStr(data.scope_for_course?.course)}
+          </p>
+          <p>{safeStr(data.scope_for_course?.what_it_changes)}</p>
+          <div style={{ padding: 12, border: "1px solid #444", borderRadius: 8 }}>
+            <p>
+              <b>En examen, si tu vois…</b> {safeStr(data.scope_for_course?.exam_spotting_box?.trigger)}
+            </p>
+            <p>
+              <b>Fais ça:</b>
+            </p>
+            <ul>
+              {(data.scope_for_course?.exam_spotting_box?.do_this ?? []).map((x: string, i: number) => (
+                <li key={i}>{x}</li>
+              ))}
+            </ul>
+            <p>
+              <b>Pièges:</b>
+            </p>
+            <ul>
+              {(data.scope_for_course?.exam_spotting_box?.pitfalls ?? []).map((x: string, i: number) => (
+                <li key={i}>{x}</li>
+              ))}
+            </ul>
+          </div>
+
+          <h3>7) Takeaways</h3>
+          <ul>
+            {(data.takeaways ?? []).map((t: string, i: number) => (
+              <li key={i}>{t}</li>
+            ))}
+          </ul>
+
+          <h3>Anchors (preuves d’ancrage)</h3>
+          <ul>
+            {(data.anchors ?? []).map((a: any, i: number) => (
+              <li key={i}>
+                <b>{safeStr(a.id)}</b> — {safeStr(a.anchor_type)} — {safeStr(a.location)} — “
+                {safeStr(a.evidence_snippet)}”
+              </li>
+            ))}
+          </ul>
+
+          <details style={{ marginTop: 16 }}>
+            <summary>Voir JSON brut</summary>
+            <pre style={{ whiteSpace: "pre-wrap", padding: 12, background: "#111", color: "#eee" }}>
+              {JSON.stringify(data, null, 2)}
+            </pre>
+          </details>
+        </div>
+      )}
     </div>
   );
 }

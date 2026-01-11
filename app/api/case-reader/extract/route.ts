@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import "@napi-rs/canvas";
 import mammoth from "mammoth";
 
 export const runtime = "nodejs";
@@ -25,6 +26,23 @@ function normalizeText(s: string) {
     .trim();
 }
 
+async function parsePdfBuffer(buf: Buffer): Promise<string> {
+  const mod: any = await import("pdf-parse");
+  const pdfParseFn = mod?.default ?? mod;
+  if (typeof pdfParseFn !== "function") throw new Error("pdf-parse export is not a function.");
+
+  try {
+    const out = await pdfParseFn(buf);
+    return out?.text ?? "";
+  } catch (e: any) {
+    const msg = String(e?.message ?? e);
+    if (msg.includes("@napi-rs/canvas")) {
+      throw new Error("PDF extraction requires @napi-rs/canvas on server. Install it and externalize it in next.config.");
+    }
+    throw e;
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const form = await req.formData();
@@ -44,35 +62,30 @@ export async function POST(req: Request) {
     const name = (file.name || "").toLowerCase();
     const mime = (file.type || "").toLowerCase();
 
+    const arrayBuffer = await file.arrayBuffer();
+    const buf = Buffer.from(arrayBuffer);
+
     const isPdf = mime === "application/pdf" || name.endsWith(".pdf");
     const isDocx =
       mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
       name.endsWith(".docx");
 
-    if (isPdf) {
-      // MVP: PDF extraction côté navigateur uniquement
-      return NextResponse.json(
-        { error: "PDF: extraction côté navigateur uniquement (PDF texte requis)." },
-        { status: 415, headers: CORS_HEADERS }
-      );
-    }
+    let text = "";
 
-    if (!isDocx) {
-      return NextResponse.json(
-        { error: "Format non supporté. Utilise un fichier .pdf ou .docx." },
-        { status: 415, headers: CORS_HEADERS }
-      );
-    }
-
-    const arrayBuffer = await file.arrayBuffer();
-    const buf = Buffer.from(arrayBuffer);
-
-    const out = await mammoth.extractRawText({ buffer: buf });
-    let text = normalizeText(out?.value ?? "");
+   if (isPdf) {
+  return NextResponse.json(
+    { error: "PDF: extraction côté navigateur uniquement (upload un PDF texte ou copie-colle le texte)." },
+    { status: 415, headers: CORS_HEADERS }
+  );
+}
+    text = normalizeText(text);
 
     if (!text) {
       return NextResponse.json(
-        { error: "No extractable text found in DOCX." },
+        {
+          error:
+            "No extractable text found. (PDF scanné/image-only?) — colle le texte ou utilise un PDF texte."
+        },
         { status: 422, headers: CORS_HEADERS }
       );
     }
