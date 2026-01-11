@@ -164,7 +164,8 @@ export default function CaseReaderPage() {
       setData(parsed as Data);
 
       if (!res2.ok) {
-        throw new Error(parsed?.error || `Erreur serveur (${res2.status})`);
+      const msg = parsed?.openai_message ? `${parsed.error}\n\nDétails: ${parsed.openai_message}` : (parsed?.error || "");
+throw new Error(msg || `Erreur serveur (${res2.status})`);
       }
     } catch (e: any) {
       setError(String(e?.message ?? e));

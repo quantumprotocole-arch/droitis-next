@@ -8,6 +8,9 @@ import { findBestCodificationMatch } from "@/lib/case-reader/codification";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// ✅ IMPORTANT: augmente la durée autorisée côté Vercel (si ton plan le permet)
+export const maxDuration = 60;
+
 const { OPENAI_API_KEY } = process.env;
 
 const CORS_HEADERS: Record<string, string> = {
@@ -18,88 +21,35 @@ const CORS_HEADERS: Record<string, string> = {
 
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
-// ✅ Central: 60s est trop court sur gros docs + schema strict
-const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS ?? 180_000);
+// ⚠️ On met un timeout OpenAI < maxDuration, pour éviter que Vercel tue la fonction avant nous.
+const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS ?? 45_000);
 
-// Limites d’entrée
-const MAX_CASE_TEXT_CHARS = Number(process.env.MAX_CASE_TEXT_CHARS ?? 120_000);
+// Taille max d’entrée acceptée (hard limit)
+const MAX_CASE_TEXT_CHARS = Number(process.env.MAX_CASE_TEXT_CHARS ?? 140_000);
 
-// Garde-fous longueur (pipeline 2 passes)
-const SOFT_COMPRESS_THRESHOLD = Number(process.env.SOFT_COMPRESS_THRESHOLD ?? 45_000); // au-delà => condensation
-const HARD_BLOCK_THRESHOLD = Number(process.env.HARD_BLOCK_THRESHOLD ?? 110_000); // au-delà => clarify
+// Taille recommandée pour éviter timeouts (soft limit, on compresse au-delà)
+const SOFT_TARGET_CHARS = Number(process.env.SOFT_TARGET_CHARS ?? 70_000);
 
-// Limites “repair/condense” (éviter payload trop gros)
-const MAX_REPAIR_RAW_CHARS = Number(process.env.MAX_REPAIR_RAW_CHARS ?? 20_000);
+// Réparations: garder petit
+const MAX_REPAIR_RAW_CHARS = Number(process.env.MAX_REPAIR_RAW_CHARS ?? 18_000);
 const MAX_REPAIR_ERR_CHARS = Number(process.env.MAX_REPAIR_ERR_CHARS ?? 6_000);
 
-// Tokens de sortie (évite runaway / incomplete)
-const MAX_OUTPUT_TOKENS_FICHE = Number(process.env.MAX_OUTPUT_TOKENS_FICHE ?? 1800);
-const MAX_OUTPUT_TOKENS_ANALYSE = Number(process.env.MAX_OUTPUT_TOKENS_ANALYSE ?? 2600);
-const MAX_OUTPUT_TOKENS_CONDENSE = Number(process.env.MAX_OUTPUT_TOKENS_CONDENSE ?? 1400);
+// Retries: moins d’essais = moins de risque de dépasser Vercel
+const MAX_OPENAI_ATTEMPTS = Number(process.env.MAX_OPENAI_ATTEMPTS ?? 2);
+const BASE_BACKOFF_MS = Number(process.env.BASE_BACKOFF_MS ?? 300);
 
-const MAX_OPENAI_ATTEMPTS = Number(process.env.MAX_OPENAI_ATTEMPTS ?? 3);
-const BASE_BACKOFF_MS = Number(process.env.BASE_BACKOFF_MS ?? 400);
-
-// --- Schema canonical AJV + schema OpenAI subset ---
+// --- Schema AJV ---
 const schemaPath = path.join(process.cwd(), "schemas", "case-reader-v2.schema.json");
-const canonicalSchema = JSON.parse(fs.readFileSync(schemaPath, "utf-8"));
-
-function toOpenAISchema(node: any): any {
-  if (Array.isArray(node)) return node.map(toOpenAISchema);
-  if (!node || typeof node !== "object") return node;
-
-  const bannedKeys = new Set([
-    "$schema",
-    "$id",
-    "title",
-    "description",
-    "allOf",
-    "oneOf",
-    "anyOf",
-    "if",
-    "then",
-    "else",
-    "const",
-    "default",
-    "examples",
-    "minLength",
-    "maxLength",
-    "pattern",
-    "minItems",
-    "maxItems",
-  ]);
-
-  const out: any = {};
-  for (const [k, v] of Object.entries(node)) {
-    if (bannedKeys.has(k)) continue;
-    out[k] = toOpenAISchema(v);
-  }
-
-  if (out.type === "object" && out.properties && typeof out.properties === "object") {
-    out.additionalProperties = false;
-
-    if (Array.isArray((node as any).required)) {
-      const req = (node as any).required.filter((k: any) => typeof k === "string");
-      const props = new Set(Object.keys(out.properties));
-      out.required = req.filter((k: string) => props.has(k));
-    }
-
-    for (const [pk, pv] of Object.entries(out.properties)) {
-      out.properties[pk] = toOpenAISchema(pv);
-    }
-  }
-
-  if (out.type === "array" && out.items) {
-    out.items = toOpenAISchema(out.items);
-  }
-
-  return out;
+let canonicalSchema: any = null;
+try {
+  canonicalSchema = JSON.parse(fs.readFileSync(schemaPath, "utf-8"));
+} catch (e) {
+  console.error("❌ Impossible de lire le schema:", schemaPath, e);
+  // On ne throw pas ici: on renverra une erreur claire au runtime
 }
 
-const openaiSchema = toOpenAISchema(canonicalSchema);
-
 const ajv = new Ajv2020({ allErrors: true, strict: false });
-const validate = ajv.compile(canonicalSchema);
+const validate = canonicalSchema ? ajv.compile(canonicalSchema) : null;
 
 export async function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -117,6 +67,10 @@ type InputBody = {
   source_kind?: "pdf" | "docx";
   filename?: string;
 };
+
+function json(data: any, status = 200) {
+  return NextResponse.json(data, { status, headers: CORS_HEADERS });
+}
 
 function clampText(s: string, maxChars: number) {
   const t = String(s ?? "");
@@ -145,29 +99,69 @@ function extractOutputText(respJson: any): string | null {
   return text || null;
 }
 
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function isRetryableStatus(status: number) {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+// ✅ compression “intelligente”
+// - garde le début (souvent: style, contexte, parties, question)
+// - garde des lignes “paragraphe / para / [123] / 123.”
+// - garde la fin (conclusion/dispositif)
+function compressCaseText(raw: string, targetChars: number) {
+  const text = String(raw ?? "");
+  if (text.length <= targetChars) return { text, compressed: false, strategy: "none" as const };
+
+  const head = text.slice(0, Math.floor(targetChars * 0.45));
+  const tail = text.slice(Math.max(0, text.length - Math.floor(targetChars * 0.25)));
+
+  const lines = text.split("\n");
+  const keep: string[] = [];
+  const re = /\b(para\.?|paragraphe|motifs|analyse|dispositif)\b|\[\d{1,5}\]|\b\d{1,4}\./i;
+
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (re.test(ln)) keep.push(ln);
+    if (keep.join("\n").length > Math.floor(targetChars * 0.30)) break;
+  }
+
+  const mid = keep.join("\n");
+  const out =
+    head.trim() +
+    "\n\n[...EXTRAIT INTERMÉDIAIRE CIBLÉ (paragraphes/sections)...]\n" +
+    mid.trim() +
+    "\n\n[...FIN DE DÉCISION...]\n" +
+    tail.trim();
+
+  return { text: out.slice(0, targetChars), compressed: true, strategy: "head+mid(para)+tail" as const };
+}
+
 function buildDroitisSystemPrompt(): string {
   return [
     "TU ES DROITIS — MODE CASE READER (PHASE 4C).",
     "",
-    "OBJECTIF: produire une fiche ou une analyse longue UTILISABLE EN EXAMEN.",
-    "",
-    "EXIGENCE DE DÉTAIL:",
-    "- Chaque point doit être substantiel (éviter les puces d'une seule phrase).",
-    "- Pour chaque point important: (1) sens, (2) pourquoi, (3) conséquence en examen.",
+    "OBJECTIF: produire une fiche OU une analyse longue UTILISABLE EN EXAMEN.",
     "",
     "RÈGLES NON NÉGOCIABLES (ANTI-HALLUCINATION + IP):",
-    "1) Ne rien inventer: tout doit être ANCRÉ dans le texte fourni.",
+    "1) Tu n’inventes rien: toute règle/test/application doit être ancrée dans le texte fourni.",
     "2) Aucune URL inventée. Si référence officielle absente: l’indiquer.",
-    "3) Ne pas republier: extraits verbatim COURTS, uniquement pour anchors.",
-    "4) Si info critique manque: type='clarify' et 1 à 3 questions max.",
-    "5) Preuves d’ancrage obligatoires: para/page + micro-extrait.",
+    "3) Tu ne republies pas la décision: pas de longues citations. Verbatim très court uniquement comme preuve d’ancrage.",
+    "4) Si info critique absente: type='clarify' + 1 à 3 questions max.",
+    "5) Tu dois fournir anchors[]: location (para/page/unknown) + micro-extrait + confidence.",
     "",
-    "FORMAT (7 sections) + ordre UI/DOCX:",
-    "- La section 6 (Portée + En examen) doit être la plus claire et sortir en premier.",
+    "FORMAT OBLIGATOIRE (7 sections dans le JSON):",
+    "1) Contexte (juridiction/tribunal/date)",
+    "2) Faits essentiels",
+    "3) Question(s) en litige",
+    "4) Règle/test",
+    "5) Application/raisonnement",
+    "6) Portée (pour le cours X) + En examen (triggers/pitfalls)",
+    "7) Takeaways",
     "",
-    "IMPORTANT (CODIFICATION):",
-    "- Si une NOTE INTERNE indique codification (articles), le mentionner en section 6.",
-    "- Ne pas prétendre que ça vient du jugement si ce n'est pas ancré.",
+    "SORTIE: JSON UNIQUEMENT.",
   ].join("\n");
 }
 
@@ -203,9 +197,7 @@ function sanitizeUrlsInOutput(out: any) {
         const v = cur[i];
         if (typeof v === "string") {
           if (/https?:\/\/|www\./i.test(v)) cur[i] = redactUrls(v);
-        } else if (v && typeof v === "object") {
-          stack.push(v);
-        }
+        } else if (v && typeof v === "object") stack.push(v);
       }
       continue;
     }
@@ -214,9 +206,7 @@ function sanitizeUrlsInOutput(out: any) {
       for (const [k, v] of Object.entries(cur)) {
         if (typeof v === "string") {
           if (/https?:\/\/|www\./i.test(v)) (cur as any)[k] = redactUrls(v);
-        } else if (Array.isArray(v) || (v && typeof v === "object")) {
-          stack.push(v);
-        }
+        } else if (Array.isArray(v) || (v && typeof v === "object")) stack.push(v);
       }
     }
   }
@@ -234,9 +224,7 @@ function normalizeClarify(parsed: any) {
   const safeQs =
     qs.length > 0
       ? qs
-      : [
-          "Ton document est long. Quelles pages/paragraphes sont les plus pertinents (ex: partie 'Règle/Test' + 'Application') ?",
-        ];
+      : ["Peux-tu fournir un extrait plus complet (idéalement avec paragraphes/pages), ou préciser le tribunal/date?"];
 
   return {
     type: "clarify",
@@ -245,22 +233,17 @@ function normalizeClarify(parsed: any) {
   };
 }
 
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-function isRetryableStatus(status: number) {
-  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
-}
-
-function isIncomplete(respJson: any): boolean {
-  return String(respJson?.status ?? "").toLowerCase() === "incomplete";
-}
-
-async function callOpenAIResponses(payload: any): Promise<{ ok: boolean; status: number; json: any }> {
+// ✅ Appel OpenAI robuste: parse JSON ou texte brut, distingue AbortError
+async function callOpenAIResponses(payload: any): Promise<{
+  ok: boolean;
+  status: number;
+  json: any;
+  rawText?: string;
+  aborted?: boolean;
+}> {
   if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY manquant");
 
-  let last = { ok: false, status: 0, json: null as any };
+  let last: any = { ok: false, status: 0, json: null, rawText: null, aborted: false };
 
   for (let attempt = 1; attempt <= MAX_OPENAI_ATTEMPTS; attempt += 1) {
     const controller = new AbortController();
@@ -277,13 +260,10 @@ async function callOpenAIResponses(payload: any): Promise<{ ok: boolean; status:
         body: JSON.stringify(payload),
       });
 
-      const json = await res.json().catch(() => null);
-      last = { ok: res.ok, status: res.status, json };
+      const rawText = await res.text().catch(() => "");
+      const json = safeJsonParse(rawText);
 
-      // Si OpenAI répond "incomplete", on traite comme échec contrôlé (=> fallback / clarify)
-      if (res.ok && isIncomplete(json)) {
-        return { ok: false, status: 502, json: { error: { message: "OpenAI response incomplete", type: "incomplete" }, raw: json } };
-      }
+      last = { ok: res.ok, status: res.status, json, rawText, aborted: false };
 
       if (res.ok) return last;
 
@@ -295,8 +275,18 @@ async function callOpenAIResponses(payload: any): Promise<{ ok: boolean; status:
 
       return last;
     } catch (e: any) {
-      const msg = e?.name === "AbortError" ? "AbortError: timeout" : String(e?.message ?? e);
-      last = { ok: false, status: 0, json: { error: { message: msg, type: e?.name ?? "fetch_error" } } };
+      const isAbort = e?.name === "AbortError" || String(e?.message ?? "").toLowerCase().includes("aborted");
+      last = {
+        ok: false,
+        status: 0,
+        json: { error: { message: String(e?.message ?? e) } },
+        rawText: null,
+        aborted: isAbort,
+      };
+
+      // si abort: pas la peine de multiplier les retries, ça va juste dépasser Vercel
+      if (isAbort) return last;
+
       if (attempt < MAX_OPENAI_ATTEMPTS) {
         const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt - 1);
         await sleep(backoff);
@@ -311,149 +301,87 @@ async function callOpenAIResponses(payload: any): Promise<{ ok: boolean; status:
   return last;
 }
 
-// -------- Payload builders --------
-
-// Pass final: schema strict (si possible)
-function payloadFinalJsonSchema(systemPrompt: string, userPayload: any, maxOutputTokens: number) {
+// ✅ payload primaire: json_object (plus stable/rapide)
+function buildPrimaryPayloadJsonObject(systemPrompt: string, userPayload: any) {
   return {
     model: MODEL,
     store: false,
-    temperature: 0,
-    max_output_tokens: maxOutputTokens,
     input: [
       { role: "system", content: systemPrompt },
       {
         role: "user",
-        content: "Lis le texte fourni et produis la sortie JSON conforme au schéma.\n\n" + JSON.stringify(userPayload),
+        content:
+          "Retourne UNIQUEMENT du JSON valide (aucun texte autour). " +
+          "Si info critique manque: type='clarify' + 1-3 questions.\n\n" +
+          JSON.stringify(userPayload),
       },
-    ],
-    text: {
-      format: {
-        type: "json_schema",
-        name: "droitis_case_reader_v2",
-        strict: true,
-        schema: openaiSchema,
-      },
-    },
-  };
-}
-
-// Fallback: JSON mode (moins fragile que json_schema)
-function payloadJsonObject(systemPrompt: string, userText: string, maxOutputTokens: number) {
-  return {
-    model: MODEL,
-    store: false,
-    temperature: 0,
-    max_output_tokens: maxOutputTokens,
-    input: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userText },
     ],
     text: { format: { type: "json_object" } },
   };
 }
 
-// Pass 1: condensation ancrée (réduit taille + latence)
-function payloadCondense(systemPrompt: string, caseText: string) {
-  const prompt =
-    "Tu vas condenser un texte de décision LONG en un 'condensé ancré' pour une seconde passe.\n" +
-    "Règles:\n" +
-    "- Ne rien inventer.\n" +
-    "- Ne pas republier: chaque extrait verbatim doit être très court (<= 20 mots).\n" +
-    "- Pour chaque élément clé, donne une référence (para/page si présent dans le texte) et un micro-extrait.\n" +
-    "- Pas d'URL.\n\n" +
-    "Retourne UNIQUEMENT un JSON avec:\n" +
-    "{\n" +
-    '  "condensed_text": "un texte structuré (sections courtes) incluant refs (para/page) + micro-extraits",\n' +
-    '  "notes": ["ex: limites / info manquante"]\n' +
-    "}\n\n" +
-    "TEXTE:\n" +
-    caseText;
-
-  return payloadJsonObject(systemPrompt, prompt, MAX_OUTPUT_TOKENS_CONDENSE);
-}
-
-// Repair JSON (quand parse ou AJV échoue)
-function payloadRepair(systemPrompt: string, raw: string, errors: any) {
+// ✅ Repair: json_object + contraintes strictes
+function buildRepairPayload(systemPrompt: string, raw: string, errors: any) {
   const rawClamped = clampText(raw, MAX_REPAIR_RAW_CHARS);
   const errClamped = clampText(JSON.stringify(errors ?? null), MAX_REPAIR_ERR_CHARS);
 
-  const prompt =
-    "Répare ce JSON.\n" +
-    "Contraintes:\n" +
-    "- UNIQUEMENT du JSON valide.\n" +
-    "- Ne rajoute aucune information non présente.\n" +
-    "- Si info critique manque: type='clarify' et 1-3 questions.\n" +
-    "- Aucune URL: remplace par '[LIEN SUPPRIMÉ]'.\n\n" +
-    "JSON À RÉPARER:\n" +
-    rawClamped +
-    "\n\nERREURS / INDICES:\n" +
-    errClamped;
-
-  return payloadJsonObject(systemPrompt, prompt, 1200);
-}
-
-function openaiErrorShape(r: { ok: boolean; status: number; json: any }, stage: string) {
   return {
-    error: "OpenAI responses error",
-    attempt_stage: stage,
-    status: r.status,
-    openai_message: r.json?.error?.message ?? null,
-    openai_type: r.json?.error?.type ?? null,
-    openai_code: r.json?.error?.code ?? null,
-    resp: r.json,
+    model: MODEL,
+    store: false,
+    input: [
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content:
+          "Répare le JSON.\n" +
+          "Contraintes:\n" +
+          "- UNIQUEMENT du JSON valide (aucun texte autour).\n" +
+          "- Ne rajoute aucune information non présente.\n" +
+          "- Si info critique manque: type='clarify' et 1-3 questions.\n" +
+          "- Ne mets jamais d'URL (http/https/www): remplace par '[LIEN SUPPRIMÉ]'.\n\n" +
+          "JSON À RÉPARER:\n" +
+          rawClamped +
+          "\n\nERREURS / INDICES:\n" +
+          errClamped,
+      },
+    ],
+    text: { format: { type: "json_object" } },
   };
 }
 
 export async function POST(req: Request) {
+  const startedAt = Date.now();
+
   try {
-    if (!OPENAI_API_KEY) {
-      return NextResponse.json({ error: "OPENAI_API_KEY manquant" }, { status: 500, headers: CORS_HEADERS });
-    }
+    if (!OPENAI_API_KEY) return json({ error: "OPENAI_API_KEY manquant" }, 500);
+    if (!canonicalSchema || !validate) return json({ error: "Schema introuvable côté serveur", schemaPath }, 500);
 
     const body = (await req.json().catch(() => null)) as InputBody | null;
     if (!body?.case_text || !body?.output_mode) {
-      return NextResponse.json({ error: "Missing case_text or output_mode" }, { status: 400, headers: CORS_HEADERS });
+      return json({ error: "Missing case_text or output_mode" }, 400);
     }
 
-    // Upload-only (comme tu le veux)
+    // ⚠️ Tu veux PDF/DOCX only — OK, mais l’erreur 502 n’est pas là.
     if (body.source_kind !== "pdf" && body.source_kind !== "docx") {
-      return NextResponse.json(
-        { error: "Upload requis: fournissez un PDF ou DOCX (source_kind='pdf'|'docx')." },
-        { status: 400, headers: CORS_HEADERS }
-      );
+      return json({ error: "Upload requis: fournissez un PDF ou DOCX (source_kind='pdf'|'docx')." }, 400);
     }
 
     if (body.case_text.length > MAX_CASE_TEXT_CHARS) {
-      return NextResponse.json(
+      return json(
         {
-          type: "clarify",
-          output_mode: body.output_mode,
-          clarification_questions: [
-            "Le document est trop long pour une analyse fiable en une passe. Quelles pages/paragraphes dois-je analyser (ex: passage 'Règle/Test' + 'Application') ?",
-          ],
+          error: "case_text trop long (hard limit)",
+          max_chars: MAX_CASE_TEXT_CHARS,
+          received_chars: body.case_text.length,
         },
-        { status: 200, headers: CORS_HEADERS }
+        413
       );
     }
 
-    // Hard-block clarify avant OpenAI si proche du maximum (évite timeouts)
-    if (body.case_text.length >= HARD_BLOCK_THRESHOLD) {
-      return NextResponse.json(
-        {
-          type: "clarify",
-          output_mode: body.output_mode,
-          clarification_questions: [
-            "Ton document est très long. Indique les pages/paragraphes à cibler (ex: 10–20 paras où la Cour énonce le test + l’application).",
-            "Veux-tu une fiche (plus court) ou une analyse longue (plus lente) ?",
-          ],
-        },
-        { status: 200, headers: CORS_HEADERS }
-      );
-    }
+    // ✅ soft-compress pour réduire timeouts / latence
+    const comp = compressCaseText(body.case_text, SOFT_TARGET_CHARS);
 
-    // Codification note (source autorisée interne)
-    const codMatch = findBestCodificationMatch(body.case_text);
+    // Codification injection (source autorisée interne)
+    const codMatch = findBestCodificationMatch(comp.text);
     const codificationLines: string[] = [];
     if (codMatch) {
       const r = codMatch.record;
@@ -465,51 +393,16 @@ export async function POST(req: Request) {
         r.principle ? `- Principe ciblé: ${r.principle}` : "",
         "",
         "INSTRUCTIONS SPÉCIALES:",
-        "A) Mention obligatoire de la codification dans la section 6 (Portée + En examen), en citant les articles.",
-        "B) Ne prétends pas que la codification provient du texte: c'est une info de table interne.",
-        "C) Ajoute un piège: oublier de mentionner la codification (certains enseignants le demandent)."
+        "A) Mention obligatoire de la codification dans la section 6 (Portée + En examen).",
+        "B) Ne prétends pas que la codification provient du texte: c'est une info système.",
+        "C) Ajoute un piège en examen: oublier de mentionner la codification."
       );
     }
 
-    const systemPrompt = [buildDroitisSystemPrompt(), "", ...codificationLines]
-      .filter((x) => typeof x === "string" && x.trim().length > 0)
-      .join("\n");
-
-    // ---- PASS 1: condensation si texte long (Central #1/#2) ----
-    let effectiveCaseText = body.case_text;
-    let usedCondense = false;
-
-    if (effectiveCaseText.length >= SOFT_COMPRESS_THRESHOLD) {
-      const rCond = await callOpenAIResponses(payloadCondense(systemPrompt, effectiveCaseText));
-      if (!rCond.ok) {
-        const status = Number.isFinite(rCond.status) && rCond.status >= 400 ? rCond.status : 502;
-        return NextResponse.json(openaiErrorShape(rCond, "condense"), { status, headers: CORS_HEADERS });
-      }
-
-      const rawCond = extractOutputText(rCond.json);
-      const parsedCond = rawCond ? safeJsonParse(rawCond) : null;
-
-      const condensedText = typeof parsedCond?.condensed_text === "string" ? parsedCond.condensed_text : "";
-      if (!condensedText.trim()) {
-        // Si condensation échoue: on ne “force” pas, on clarifie
-        return NextResponse.json(
-          {
-            type: "clarify",
-            output_mode: body.output_mode,
-            clarification_questions: [
-              "Le document est long et la condensation a échoué. Peux-tu indiquer les pages/paragraphes à cibler (règle/test + application) ?",
-            ],
-          },
-          { status: 200, headers: CORS_HEADERS }
-        );
-      }
-
-      effectiveCaseText = condensedText;
-      usedCondense = true;
-    }
+    const systemPrompt = [buildDroitisSystemPrompt(), "", ...codificationLines].filter(Boolean).join("\n");
 
     const userPayload = {
-      case_text: effectiveCaseText,
+      case_text: comp.text,
       output_mode: body.output_mode,
       language: body.language ?? "fr",
       institution_slug: body.institution_slug,
@@ -519,106 +412,112 @@ export async function POST(req: Request) {
       decision_date_hint: body.decision_date_hint,
       source_kind: body.source_kind,
       filename: body.filename,
-      // Info utile côté client
-      _meta: { used_condense: usedCondense, original_chars: body.case_text.length, effective_chars: effectiveCaseText.length },
+      // debug meta pour UI (facultatif)
+      __server_notes: {
+        compressed: comp.compressed,
+        compression_strategy: comp.strategy,
+        original_chars: body.case_text.length,
+        sent_chars: comp.text.length,
+      },
     };
 
-    const maxOut = body.output_mode === "analyse_longue" ? MAX_OUTPUT_TOKENS_ANALYSE : MAX_OUTPUT_TOKENS_FICHE;
+    // 1) primary json_object
+    let r = await callOpenAIResponses(buildPrimaryPayloadJsonObject(systemPrompt, userPayload));
 
-    // ---- PASS 2: génération finale ----
-    // A) Essai schema strict
-    let r1 = await callOpenAIResponses(payloadFinalJsonSchema(systemPrompt, userPayload, maxOut));
-    if (!r1.ok) {
-      // B) fallback json_object (moins fragile)
-      const fallbackPrompt =
-        "Retourne UNIQUEMENT du JSON valide conforme au schéma attendu (mêmes champs) à partir des données fournies.\n" +
-        "Rappels: ne rien inventer, anchors courts, pas d'URL.\n\n" +
-        JSON.stringify(userPayload);
+    if (!r.ok) {
+      // ✅ erreurs “friendly”
+      const took = Date.now() - startedAt;
 
-      r1 = await callOpenAIResponses(payloadJsonObject(systemPrompt, fallbackPrompt, maxOut));
-    }
+      // Abort/timeout local
+      if (r.aborted) {
+        return json(
+          {
+            error: "OpenAI timeout (serveur)",
+            hint:
+              "La décision est probablement trop longue ou la réponse trop lourde. " +
+              "Essaie avec un extrait plus court (motifs + dispositif) ou relance. " +
+              "On peut aussi augmenter maxDuration/timeout côté Vercel.",
+            latency_ms: took,
+          },
+          504
+        );
+      }
 
-    if (!r1.ok) {
-      const status = Number.isFinite(r1.status) && r1.status >= 400 ? r1.status : 502;
-      return NextResponse.json(openaiErrorShape(r1, "final"), { status, headers: CORS_HEADERS });
-    }
+      const status = Number.isFinite(r.status) && r.status >= 400 ? r.status : 502;
+      const msg =
+        r.json?.error?.message ||
+        (typeof r.rawText === "string" && r.rawText.slice(0, 400)) ||
+        "Erreur inconnue";
 
-    const raw1 = extractOutputText(r1.json);
-    if (!raw1) {
-      return NextResponse.json(
-        { error: "Empty output_text from OpenAI", attempt_stage: "final", resp: r1.json },
-        { status: 502, headers: CORS_HEADERS }
+      console.warn("OpenAI responses failed", { status: r.status, msg: String(msg).slice(0, 300) });
+
+      return json(
+        {
+          error: "OpenAI responses error",
+          status: r.status,
+          openai_message: msg,
+          latency_ms: took,
+        },
+        status
       );
     }
 
-    // Parse
-    let parsed = safeJsonParse(raw1);
+    const raw = extractOutputText(r.json);
+    if (!raw) {
+      return json({ error: "Empty output_text from OpenAI" }, 502);
+    }
+
+    let parsed = safeJsonParse(raw);
 
     // Parse fail => repair
     if (!parsed) {
-      const r2 = await callOpenAIResponses(payloadRepair(systemPrompt, raw1, { parse: "failed" }));
-      if (!r2.ok) {
-        const status = Number.isFinite(r2.status) && r2.status >= 400 ? r2.status : 502;
-        return NextResponse.json(openaiErrorShape(r2, "repair_parse"), { status, headers: CORS_HEADERS });
+      const rr = await callOpenAIResponses(buildRepairPayload(systemPrompt, raw, { parse: "failed" }));
+      if (!rr.ok) {
+        const msg = rr.json?.error?.message ?? "repair failed";
+        return json({ error: "OpenAI repair error", openai_message: msg }, 502);
       }
-      const raw2 = extractOutputText(r2.json);
-      parsed = raw2 ? safeJsonParse(raw2) : null;
-      if (!parsed) {
-        return NextResponse.json(
-          { error: "Repair output still not valid JSON", attempt_stage: "repair_parse", raw: clampText(raw2 ?? "", 2000) },
-          { status: 502, headers: CORS_HEADERS }
-        );
-      }
+      const raw2 = extractOutputText(rr.json);
+      if (!raw2) return json({ error: "Empty output_text from repair" }, 502);
+      parsed = safeJsonParse(raw2);
+      if (!parsed) return json({ error: "Repair output still not valid JSON", raw: clampText(raw2, 1200) }, 502);
     }
 
     // Clarify passthrough
     if (parsed?.type === "clarify") {
-      return NextResponse.json(normalizeClarify(parsed), { status: 200, headers: CORS_HEADERS });
+      return json(normalizeClarify(parsed), 200);
     }
 
     applyAnswerGuards(parsed);
 
-    // AJV validate
-    let ok = validate(parsed) as boolean;
-    if (ok) {
-      return NextResponse.json(parsed, { status: 200, headers: CORS_HEADERS });
+    // AJV validate; si fail => repair (avec erreurs AJV)
+    const ok = validate(parsed) as boolean;
+    if (ok) return json(parsed, 200);
+
+    const rr2 = await callOpenAIResponses(buildRepairPayload(systemPrompt, JSON.stringify(parsed), validate.errors));
+    if (!rr2.ok) {
+      const msg = rr2.json?.error?.message ?? "schema repair failed";
+      return json({ error: "OpenAI schema repair error", openai_message: msg, errors: validate.errors }, 502);
     }
 
-    // AJV fail => repair
-    const r3 = await callOpenAIResponses(payloadRepair(systemPrompt, JSON.stringify(parsed), validate.errors));
-    if (!r3.ok) {
-      const status = Number.isFinite(r3.status) && r3.status >= 400 ? r3.status : 502;
-      return NextResponse.json(openaiErrorShape(r3, "repair_schema"), { status, headers: CORS_HEADERS });
-    }
+    const raw3 = extractOutputText(rr2.json);
+    if (!raw3) return json({ error: "Empty output_text from schema repair" }, 502);
 
-    const raw3 = extractOutputText(r3.json);
-    const parsed3 = raw3 ? safeJsonParse(raw3) : null;
+    const parsed3 = safeJsonParse(raw3);
+    if (!parsed3) return json({ error: "Schema repair output not valid JSON", raw: clampText(raw3, 1200) }, 502);
 
-    if (!parsed3) {
-      return NextResponse.json(
-        { error: "Repair output not valid JSON", attempt_stage: "repair_schema", raw: clampText(raw3 ?? "", 2000) },
-        { status: 502, headers: CORS_HEADERS }
-      );
-    }
-
-    if (parsed3?.type === "clarify") {
-      return NextResponse.json(normalizeClarify(parsed3), { status: 200, headers: CORS_HEADERS });
-    }
+    if (parsed3?.type === "clarify") return json(normalizeClarify(parsed3), 200);
 
     applyAnswerGuards(parsed3);
 
-    ok = validate(parsed3) as boolean;
-    if (!ok) {
-      return NextResponse.json(
-        { error: "Schema validation failed (after repair)", attempt_stage: "repair_schema", errors: validate.errors, parsed: parsed3 },
-        { status: 422, headers: CORS_HEADERS }
-      );
+    const ok2 = validate(parsed3) as boolean;
+    if (!ok2) {
+      return json({ error: "Schema validation failed (after repair)", errors: validate.errors, parsed: parsed3 }, 422);
     }
 
-    return NextResponse.json(parsed3, { status: 200, headers: CORS_HEADERS });
+    return json(parsed3, 200);
   } catch (e: any) {
-    const msg = e?.name === "AbortError" ? "AbortError: timeout" : String(e?.message ?? e);
-    console.error(e);
-    return NextResponse.json({ error: "Unhandled error", details: msg }, { status: 500, headers: CORS_HEADERS });
+    const msg = e?.name === "AbortError" ? "OpenAI timeout" : String(e?.message ?? e);
+    console.error("Unhandled error /api/case-reader:", e);
+    return json({ error: "Unhandled error", details: msg }, 500);
   }
 }
