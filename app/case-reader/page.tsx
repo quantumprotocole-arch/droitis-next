@@ -68,6 +68,17 @@ export default function CaseReaderPage() {
     return data && data.type === "answer";
   }, [data]);
 
+  const elementsImportants = useMemo(() => {
+    const takeaways = data && data.type === "answer" ? (data.takeaways ?? []) : [];
+    const defs = takeaways.filter((t: string) => {
+      const s = String(t ?? "").trim().toLowerCase();
+      return s.startsWith("définition —") || s.startsWith("definition —");
+    });
+    const others = takeaways.filter((t: string) => !defs.includes(t));
+    return { definitions: defs, otherTakeaways: others };
+  }, [data]);
+
+
   async function onExtractFile() {
     if (!file) return;
     setLoading(true);
@@ -286,6 +297,43 @@ export default function CaseReaderPage() {
         <div>
           <h2>Fiche / Analyse</h2>
 
+          <h2>Éléments importants</h2>
+          <p>
+            <b>Portée (cours):</b> {safeStr(data.scope_for_course?.course)}
+          </p>
+          <p style={{ whiteSpace: "pre-wrap" }}>{safeStr(data.scope_for_course?.what_it_changes)}</p>
+
+          <p>
+            <b>Attention ! En examen, si tu vois…</b> {safeStr(data.scope_for_course?.exam_spotting_box?.trigger)}
+          </p>
+          <p>
+            <b>Fais ça:</b>
+          </p>
+          <ul>
+            {(data.scope_for_course?.exam_spotting_box?.do_this ?? []).map((x: string, i: number) => (
+              <li key={i}>{x}</li>
+            ))}
+          </ul>
+          <p>
+            <b>Pièges à éviter:</b>
+          </p>
+          <ul>
+            {(data.scope_for_course?.exam_spotting_box?.pitfalls ?? []).map((x: string, i: number) => (
+              <li key={i}>{x}</li>
+            ))}
+          </ul>
+
+          <p>
+            <b>Définitions:</b>
+          </p>
+          <ul>
+            {(elementsImportants.definitions ?? []).map((t: string, i: number) => (
+              <li key={i}>{t}</li>
+            ))}
+          </ul>
+
+          <hr style={{ margin: "24px 0" }} />
+
           <h3>1) Contexte</h3>
           <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(data.context, null, 2)}</pre>
 
@@ -335,36 +383,9 @@ export default function CaseReaderPage() {
             <b>Ratio / résultat:</b> {safeStr(data.application_reasoning?.ratio_or_result)}
           </p>
 
-          <h3>6) Portée (cours) + En examen</h3>
-          <p>
-            <b>Cours:</b> {safeStr(data.scope_for_course?.course)}
-          </p>
-          <p>{safeStr(data.scope_for_course?.what_it_changes)}</p>
-          <div style={{ padding: 12, border: "1px solid #444", borderRadius: 8 }}>
-            <p>
-              <b>En examen, si tu vois…</b> {safeStr(data.scope_for_course?.exam_spotting_box?.trigger)}
-            </p>
-            <p>
-              <b>Fais ça:</b>
-            </p>
-            <ul>
-              {(data.scope_for_course?.exam_spotting_box?.do_this ?? []).map((x: string, i: number) => (
-                <li key={i}>{x}</li>
-              ))}
-            </ul>
-            <p>
-              <b>Pièges:</b>
-            </p>
-            <ul>
-              {(data.scope_for_course?.exam_spotting_box?.pitfalls ?? []).map((x: string, i: number) => (
-                <li key={i}>{x}</li>
-              ))}
-            </ul>
-          </div>
-
-          <h3>7) Takeaways</h3>
+          <h3>Takeaways (autres)</h3>
           <ul>
-            {(data.takeaways ?? []).map((t: string, i: number) => (
+            {(elementsImportants.otherTakeaways ?? []).map((t: string, i: number) => (
               <li key={i}>{t}</li>
             ))}
           </ul>

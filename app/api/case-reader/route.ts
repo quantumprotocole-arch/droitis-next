@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
 import Ajv2020 from "ajv/dist/2020";
+import { buildCodificationPromptBlock, findCodificationMatch, injectCodificationNoticeIntoAnswer } from "@/lib/case-reader/codification";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -107,7 +108,7 @@ function extractOutputText(respJson: any): string | null {
   return text || null;
 }
 
-function buildDeveloperPrompt() {
+function buildDeveloperPrompt(extraBlock?: string) {
   return [
     "TU ES DROITIS — MODE CASE READER (PHASE 4C).",
     "",
@@ -128,6 +129,8 @@ function buildDeveloperPrompt() {
     "- Si institution_slug/course_slug sont fournis, adapte la section 'Portée' + 'En examen...'.",
     "",
     "FORMAT (7 SECTIONS) via le JSON:",
+    "IMPORTANT (UI/DOCX): les ÉLÉMENTS IMPORTANTS sont affichés en premier et proviennent de scope_for_course + takeaways ‘Définition — ...’.",
+    "=> Soigne scope_for_course: what_it_changes doit être court, déterminant, orienté examen; exam_spotting_box doit être concret (trigger + do_this + pitfalls).",
     "1. Contexte",
     "2. Faits essentiels",
     "3. Question(s) en litige",
@@ -138,8 +141,15 @@ function buildDeveloperPrompt() {
     "",
     "CONTRAINTE takeaways:",
     "- Inclure au moins 2 lignes commençant par 'Définition — ...'.",
+    "- Les définitions doivent être courtes, vulgarisées et exactes (pas de blabla).",
     "",
-    "SORTIE: JSON UNIQUEMENT, conforme au schéma. Aucun texte hors JSON."
+    "CONTRAINTE examen:",
+    "- exam_spotting_box.do_this: 2–6 items (actions claires).",
+    "- exam_spotting_box.pitfalls: 2–6 items (pièges concrets).",
+    "",
+    "SORTIE: JSON UNIQUEMENT, conforme au schéma. Aucun texte hors JSON.",
+    "",
+    ...(extraBlock && extraBlock.trim().length ? ["", extraBlock.trim()] : [])
   ].join("\n");
 }
 
@@ -339,7 +349,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const developer = buildDeveloperPrompt();
+    const preCodif = findCodificationMatch({ caseText: body.case_text });
+    const developer = buildDeveloperPrompt(preCodif ? buildCodificationPromptBlock(preCodif) : undefined);
     const userPayload = {
       case_text: body.case_text,
       output_mode: body.output_mode,
@@ -401,6 +412,12 @@ export async function POST(req: Request) {
 
     // Answer guards (IDs + URL redaction)
     applyAnswerGuards(parsed);
+    const postCodif = preCodif ?? findCodificationMatch({
+      caseNameHint: parsed?.context?.case_name,
+      citationHint: parsed?.context?.neutral_citation,
+      caseText: body.case_text,
+    });
+    if (postCodif) injectCodificationNoticeIntoAnswer(parsed, postCodif);
 
     // -------- 4) Ajv validation --------
     let ok = validate(parsed) as boolean;

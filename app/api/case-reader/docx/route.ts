@@ -65,63 +65,50 @@ export async function POST(req: Request) {
 
     children.push(h("Droitis — Fiche (Case Reader)", HeadingLevel.TITLE));
         // =========================
-    // BLOC EXAM-FIRST (EN TÊTE)
     // =========================
+    // ÉLÉMENTS IMPORTANTS (EN TÊTE)
+    // =========================
+    children.push(h("Éléments importants", HeadingLevel.HEADING_1));
 
-    // 0) Dispositions importantes
-    children.push(h("Dispositions importantes (à citer)", HeadingLevel.HEADING_1));
-    for (const r of safeArray(out.rule_test?.rules)) {
-      const ruleText = String(r?.rule ?? "").trim();
-      if (!ruleText) continue;
-      const refs = safeArray<string>(r?.anchor_refs).filter(Boolean);
-      const suffix = refs.length ? ` (ancres: ${refs.join(", ")})` : "";
-      children.push(bullet(ruleText + suffix));
+    // 0a) Portée (cours)
+    children.push(h("Portée (cours)", HeadingLevel.HEADING_2));
+    const course = String(out.scope_for_course?.course ?? "").trim();
+    if (course) children.push(p(`Cours: ${course}`));
+
+    const what = String(out.scope_for_course?.what_it_changes ?? "").trim();
+    if (what) children.push(p(what));
+
+    // 0b) Attention examen + actions
+    children.push(h("Attention ! En examen, si tu vois…", HeadingLevel.HEADING_2));
+    const trigger = String(out.scope_for_course?.exam_spotting_box?.trigger ?? "").trim();
+    if (trigger) children.push(p(trigger));
+
+    children.push(h("Fais ça", HeadingLevel.HEADING_3));
+    for (const x of safeArray<string>(out.scope_for_course?.exam_spotting_box?.do_this)) {
+      const t = String(x ?? "").trim();
+      if (t) children.push(bullet(t));
     }
 
-    // 0b) Pièges à éviter
-    children.push(h("Pièges à éviter", HeadingLevel.HEADING_1));
+    // 0c) Pièges à éviter
+    children.push(h("Pièges à éviter", HeadingLevel.HEADING_3));
     for (const x of safeArray<string>(out.scope_for_course?.exam_spotting_box?.pitfalls)) {
       const t = String(x ?? "").trim();
       if (t) children.push(bullet(t));
     }
 
-    // 0c) Quand vérifier la décision (heuristique simple)
-    const anchors = safeArray(out.anchors);
-    const lowConfidenceRatio =
-      anchors.length > 0
-        ? anchors.filter((a: any) => String(a?.confidence ?? "").toLowerCase() === "faible").length /
-          anchors.length
-        : 0;
-
-    const manyUnknown =
-      JSON.stringify(out.context ?? {}).includes("UNKNOWN") ||
-      JSON.stringify(out.facts ?? {}).includes("UNKNOWN");
-
-    const shouldVerify =
-      String(out.context?.neutral_citation ?? "UNKNOWN") === "UNKNOWN" ||
-      manyUnknown ||
-      lowConfidenceRatio >= 0.5;
-
-    children.push(h("Quand aller vérifier la décision", HeadingLevel.HEADING_1));
-    children.push(
-      p(
-        shouldVerify
-          ? "Vérifie la décision complète (citation, tribunal/date, paragraphes) si tu t’en sers en examen/travail ou si un point est contestable. Ici, certaines infos clés semblent manquantes ou peu sûres."
-          : "Vérification recommandée seulement si tu as besoin d’une citation exacte, ou d’un passage précis."
-      )
-    );
-
-    // 0d) Définitions rapides (si le modèle les fournit dans takeaways sous forme 'Définition — ...')
-    const defs = safeArray<string>(out.takeaways).filter((t) =>
-      String(t).toLowerCase().startsWith("définition")
-    );
-    if (defs.length) {
-      children.push(h("Définitions rapides (vulgarisées)", HeadingLevel.HEADING_1));
-      for (const d of defs) children.push(bullet(String(d)));
+    // 0d) Définitions (takeaways filtrés)
+    children.push(h("Définitions", HeadingLevel.HEADING_2));
+    const defs = safeArray<string>(out.takeaways).filter((t) => {
+      const s = String(t ?? "").trim().toLowerCase();
+      return s.startsWith("définition —") || s.startsWith("definition —");
+    });
+    for (const d of defs) {
+      const t = String(d ?? "").trim();
+      if (t) children.push(bullet(t));
     }
 
-
-    children.push(h("1. Contexte", HeadingLevel.HEADING_1));
+    children.push(new Paragraph({}));
+children.push(h("1. Contexte", HeadingLevel.HEADING_1));
     children.push(p(JSON.stringify(out.context ?? {}, null, 2)));
 
     children.push(h("2. Faits essentiels", HeadingLevel.HEADING_1));
@@ -170,8 +157,12 @@ export async function POST(req: Request) {
       children.push(bullet(x));
     }
 
-    children.push(h("7. Takeaways", HeadingLevel.HEADING_1));
-    for (const x of safeArray<string>(out.takeaways)) {
+    children.push(h("7. Takeaways (autres)", HeadingLevel.HEADING_1));
+    const otherTakeaways = safeArray<string>(out.takeaways).filter((t) => {
+      const s = String(t ?? "").trim().toLowerCase();
+      return !(s.startsWith("définition —") || s.startsWith("definition —"));
+    });
+    for (const x of otherTakeaways) {
       children.push(bullet(x));
     }
 
