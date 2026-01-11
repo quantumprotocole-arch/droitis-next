@@ -18,7 +18,9 @@ const CORS_HEADERS: Record<string, string> = {
 
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS ?? 120_000);
+
 const MAX_CASE_TEXT_CHARS = Number(process.env.MAX_CASE_TEXT_CHARS ?? 120_000);
+const LONG_TEXT_THRESHOLD = Number(process.env.LONG_TEXT_THRESHOLD ?? 85_000);
 
 const MAX_REPAIR_RAW_CHARS = Number(process.env.MAX_REPAIR_RAW_CHARS ?? 20_000);
 const MAX_REPAIR_ERR_CHARS = Number(process.env.MAX_REPAIR_ERR_CHARS ?? 6_000);
@@ -26,9 +28,7 @@ const MAX_REPAIR_ERR_CHARS = Number(process.env.MAX_REPAIR_ERR_CHARS ?? 6_000);
 const MAX_OUTPUT_TOKENS_FICHE = Number(process.env.MAX_OUTPUT_TOKENS_FICHE ?? 1800);
 const MAX_OUTPUT_TOKENS_ANALYSE = Number(process.env.MAX_OUTPUT_TOKENS_ANALYSE ?? 2600);
 
-// Si texte très long, on encourage l’usage du preview (mais on ne force pas de “condense pipeline”)
-const LONG_TEXT_THRESHOLD = Number(process.env.LONG_TEXT_THRESHOLD ?? 70_000);
-
+// --- Schema canonical AJV + schema OpenAI subset ---
 const schemaPath = path.join(process.cwd(), "schemas", "case-reader-v2.schema.json");
 const canonicalSchema = JSON.parse(fs.readFileSync(schemaPath, "utf-8"));
 
@@ -87,6 +87,7 @@ function toOpenAISchema(node: any): any {
 
 const openaiSchema = toOpenAISchema(canonicalSchema);
 
+// --- Ajv validator ---
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 const validate = ajv.compile(canonicalSchema);
 
@@ -103,13 +104,13 @@ type InputBody = {
   jurisdiction_hint?: string;
   court_hint?: string;
   decision_date_hint?: string;
+
+  // Upload-only enforcement
   source_kind?: "pdf" | "docx";
   filename?: string;
 
-  // ✅ nouveau: confirmation obligatoire
+  // champs legacy (si jamais encore envoyés par l'UI)
   confirmed_preview?: boolean;
-
-  // ✅ optionnel: preview (validé par user), pour aider et réduire risque si texte long
   preview_payload?: any;
 };
 
@@ -145,7 +146,11 @@ function buildDroitisSystemPrompt(): string {
   return [
     "TU ES DROITIS — MODE CASE READER (PHASE 4C).",
     "",
-    "ÉTAPE 2/2 (FINAL): produire la réponse JSON finale conforme au schéma.",
+    "OBJECTIF: produire une fiche ou une analyse longue UTILISABLE EN EXAMEN.",
+    "",
+    "EXIGENCE DE DÉTAIL:",
+    "- Chaque point doit être substantiel (éviter les puces d'une seule phrase).",
+    "- Pour chaque point important: (1) sens, (2) pourquoi, (3) conséquence en examen.",
     "",
     "RÈGLES NON NÉGOCIABLES (ANTI-HALLUCINATION + IP):",
     "1) Ne rien inventer: tout doit être ANCRÉ dans le texte fourni.",
@@ -155,7 +160,7 @@ function buildDroitisSystemPrompt(): string {
     "5) Preuves d’ancrage obligatoires: para/page + micro-extrait.",
     "",
     "FORMAT OBLIGATOIRE (7 SECTIONS): conforme au schéma.",
-    "IMPORTANT UI/DOCX: la section 6 doit être la plus claire (cours + examen).",
+    "IMPORTANT UI/DOCX: la section 6 doit être la plus claire (cours + examen) et sortir en premier dans l’affichage client.",
     "",
     "IMPORTANT (CODIFICATION): si une NOTE INTERNE indique codification (articles), le mentionner explicitement en section 6, sans prétendre que ça vient du texte.",
   ].join("\n");
@@ -221,7 +226,7 @@ function normalizeClarify(parsed: any) {
   const qs = Array.isArray(parsed?.clarification_questions)
     ? parsed.clarification_questions.slice(0, 3)
     : [];
-  const safeQs = qs.length > 0 ? qs : ["Peux-tu fournir un extrait plus complet (avec pages/paragraphes) ?"];
+  const safeQs = qs.length > 0 ? qs : ["Peux-tu fournir une version plus courte du document (ex: pages pertinentes) ?"];
 
   return {
     type: "clarify",
@@ -321,7 +326,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing case_text or output_mode" }, { status: 400, headers: CORS_HEADERS });
     }
 
-    // Browse-only
+    // Upload-only
     if (body.source_kind !== "pdf" && body.source_kind !== "docx") {
       return NextResponse.json(
         { error: "Upload requis: PDF ou DOCX (source_kind='pdf'|'docx')." },
@@ -329,18 +334,24 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ confirmation obligatoire (nouveau flux)
-    if (body.confirmed_preview !== true) {
-      return NextResponse.json(
-        { error: "Preview non confirmé. Confirme l’aperçu avant de générer." },
-        { status: 409, headers: CORS_HEADERS }
-      );
-    }
-
     if (body.case_text.length > MAX_CASE_TEXT_CHARS) {
       return NextResponse.json(
         { error: "case_text trop long", max_chars: MAX_CASE_TEXT_CHARS, received_chars: body.case_text.length },
         { status: 413, headers: CORS_HEADERS }
+      );
+    }
+
+    // Garde-fou: très long => clarify (évite timeouts 502)
+    if (body.case_text.length >= LONG_TEXT_THRESHOLD) {
+      return NextResponse.json(
+        {
+          type: "clarify",
+          output_mode: body.output_mode,
+          clarification_questions: [
+            "Le document est très long. Peux-tu téléverser une version réduite (pages où la Cour énonce le test + l’application + conclusion) ?",
+          ],
+        },
+        { status: 200, headers: CORS_HEADERS }
       );
     }
 
@@ -361,8 +372,7 @@ export async function POST(req: Request) {
       .filter((x) => typeof x === "string" && x.trim().length > 0)
       .join("\n");
 
-    // Si très long, on préfère injecter le preview validé (si présent) en plus
-    const basePayload: any = {
+    const userPayload: any = {
       case_text: body.case_text,
       output_mode: body.output_mode,
       language: body.language ?? "fr",
@@ -375,34 +385,24 @@ export async function POST(req: Request) {
       filename: body.filename,
     };
 
-    if (body.case_text.length >= LONG_TEXT_THRESHOLD && body.preview_payload) {
-      basePayload.preview_validated_by_user = body.preview_payload;
-      basePayload.note = "Le preview ci-dessus a été CONFIRMÉ par l’utilisateur. Utilise-le pour structurer, mais ancre tout dans le texte (anchors).";
-    }
-
     const maxOut = body.output_mode === "analyse_longue" ? MAX_OUTPUT_TOKENS_ANALYSE : MAX_OUTPUT_TOKENS_FICHE;
 
     // 1) Primary json_schema
-    let r1 = await callOpenAIResponses(buildPrimaryPayload(systemPrompt, basePayload, maxOut));
+    let r1 = await callOpenAIResponses(buildPrimaryPayload(systemPrompt, userPayload, maxOut));
 
-    // 2) Fallback json_object si souci modèle/schema
+    // 2) Fallback json_object
     if (!r1.ok) {
       const fallbackPrompt =
         "Retourne UNIQUEMENT du JSON valide conforme exactement au schéma attendu.\n" +
         "Ne rien inventer, anchors courts, pas d'URL.\n\n" +
-        JSON.stringify(basePayload);
+        JSON.stringify(userPayload);
 
       r1 = await callOpenAIResponses(buildJsonObjectPayload(systemPrompt, fallbackPrompt, maxOut));
     }
 
     if (!r1.ok) {
       return NextResponse.json(
-        {
-          error: "OpenAI responses error",
-          status: r1.status,
-          openai_message: r1.json?.error?.message ?? null,
-          resp: r1.json,
-        },
+        { error: "OpenAI responses error", status: r1.status, openai_message: r1.json?.error?.message ?? null, resp: r1.json },
         { status: 502, headers: CORS_HEADERS }
       );
     }
@@ -423,7 +423,6 @@ export async function POST(req: Request) {
           { status: 502, headers: CORS_HEADERS }
         );
       }
-
       const raw2 = extractOutputText(r2.json);
       parsed = raw2 ? safeJsonParse(raw2) : null;
 
@@ -467,7 +466,10 @@ export async function POST(req: Request) {
 
     ok = validate(parsed3) as boolean;
     if (!ok) {
-      return NextResponse.json({ error: "Schema validation failed (after repair)", errors: validate.errors, parsed: parsed3 }, { status: 422, headers: CORS_HEADERS });
+      return NextResponse.json(
+        { error: "Schema validation failed (after repair)", errors: validate.errors, parsed: parsed3 },
+        { status: 422, headers: CORS_HEADERS }
+      );
     }
 
     return NextResponse.json(parsed3, { status: 200, headers: CORS_HEADERS });
