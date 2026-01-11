@@ -5,40 +5,6 @@ import { extractPdfTextFromFile } from "@/lib/case-reader/pdfText.client";
 
 export const dynamic = "force-dynamic";
 
-type Preview = {
-  type: "preview";
-  output_mode: "fiche" | "analyse_longue";
-  preview: {
-    scope_course_first?: {
-      course?: string;
-      what_it_changes?: string;
-      exam_spotting_box?: {
-        trigger?: string;
-        do_this?: string[];
-        pitfalls?: string[];
-      };
-      codification_if_any?: string;
-    };
-    context_text?: string;
-    key_facts?: { fact: string; why_it_matters?: string; anchor_refs?: string[] }[];
-    issues?: { issue: string; anchor_refs?: string[] }[];
-    rules_tests?: { item: string; kind: "rule" | "test"; anchor_refs?: string[] }[];
-    reasoning?: { step: string; anchor_refs?: string[] }[];
-    uncertainties?: string[];
-    anchors?: { id: string; anchor_type: string; location: string; evidence_snippet: string; confidence: string }[];
-  };
-};
-
-type Clarify = {
-  type: "clarify";
-  output_mode: "fiche" | "analyse_longue";
-  clarification_questions: string[];
-};
-
-type Answer = any; // réponse finale (schéma canonical)
-
-type Output = Preview | Clarify | Answer;
-
 function isPdfFile(f: File) {
   const name = (f.name || "").toLowerCase();
   const mime = (f.type || "").toLowerCase();
@@ -63,24 +29,22 @@ export default function CaseReaderPage() {
   const [sourceKind, setSourceKind] = useState<"pdf" | "docx" | null>(null);
 
   const [extractedText, setExtractedText] = useState<string>("");
-  const [preview, setPreview] = useState<Preview | null>(null);
-  const [finalAnswer, setFinalAnswer] = useState<any | null>(null);
+  const [result, setResult] = useState<any | null>(null);
 
   const [loadingExtract, setLoadingExtract] = useState(false);
-  const [loadingPreview, setLoadingPreview] = useState(false);
-  const [loadingFinal, setLoadingFinal] = useState(false);
+  const [loadingAnalyze, setLoadingAnalyze] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
   const [status, setStatus] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<any | null>(null);
 
-  const canPreview = useMemo(() => extractedText.trim().length > 0 && !loadingExtract, [extractedText, loadingExtract]);
-  const canGenerate = useMemo(() => !!preview && !loadingFinal, [preview, loadingFinal]);
+  const canAnalyze = useMemo(
+    () => extractedText.trim().length > 0 && !!sourceKind && !loadingAnalyze && !loadingExtract,
+    [extractedText, sourceKind, loadingAnalyze, loadingExtract]
+  );
 
-  const canDownload = useMemo(() => {
-    return finalAnswer?.type === "answer" && !downloading;
-  }, [finalAnswer, downloading]);
+  const canDownload = useMemo(() => result?.type === "answer" && !downloading, [result, downloading]);
 
   async function onExtractFile() {
     if (!file) return;
@@ -91,8 +55,7 @@ export default function CaseReaderPage() {
     setStatus(null);
 
     setExtractedText("");
-    setPreview(null);
-    setFinalAnswer(null);
+    setResult(null);
 
     try {
       if (isPdfFile(file)) {
@@ -101,9 +64,7 @@ export default function CaseReaderPage() {
 
         const nonSpace = (text || "").replace(/\s+/g, "");
         if (nonSpace.length < 400) {
-          throw new Error(
-            "PDF probablement scanné (image-only): aucun texte exploitable détecté. Utilise un PDF texte ou un DOCX."
-          );
+          throw new Error("PDF probablement scanné (image-only): aucun texte exploitable détecté.");
         }
 
         setExtractedText(text);
@@ -140,64 +101,14 @@ export default function CaseReaderPage() {
     }
   }
 
-  async function onPreview() {
-    if (!extractedText.trim() || !sourceKind) return;
+  async function onAnalyze() {
+    if (!canAnalyze) return;
 
-    setLoadingPreview(true);
+    setLoadingAnalyze(true);
     setError(null);
     setErrorDetails(null);
     setStatus(null);
-
-    setPreview(null);
-    setFinalAnswer(null);
-
-    try {
-      const res = await fetch("/api/case-reader/preview", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          case_text: extractedText,
-          output_mode: outputMode,
-          institution_slug: institutionSlug,
-          course_slug: courseSlug,
-          source_kind: sourceKind,
-          filename: file?.name ?? undefined,
-        }),
-      });
-
-      setStatus(res.status);
-      const parsed = (await res.json().catch(() => null)) as any;
-
-      if (!res.ok) {
-        setError(parsed?.error ?? "Preview error");
-        setErrorDetails(parsed);
-        return;
-      }
-
-      if (parsed?.type !== "preview") {
-        // si jamais l’API renvoie autre chose
-        setError("Réponse preview inattendue.");
-        setErrorDetails(parsed);
-        return;
-      }
-
-      setPreview(parsed as Preview);
-    } catch (e: any) {
-      setError(String(e?.message ?? e));
-    } finally {
-      setLoadingPreview(false);
-    }
-  }
-
-  async function onGenerateConfirmed() {
-    if (!preview || !sourceKind) return;
-
-    setLoadingFinal(true);
-    setError(null);
-    setErrorDetails(null);
-    setStatus(null);
-
-    setFinalAnswer(null);
+    setResult(null);
 
     try {
       const res = await fetch("/api/case-reader", {
@@ -210,8 +121,6 @@ export default function CaseReaderPage() {
           course_slug: courseSlug,
           source_kind: sourceKind,
           filename: file?.name ?? undefined,
-          confirmed_preview: true,
-          preview_payload: preview, // aperçu validé
         }),
       });
 
@@ -219,21 +128,21 @@ export default function CaseReaderPage() {
       const parsed = await res.json().catch(() => null);
 
       if (!res.ok) {
-        setError(parsed?.error ?? "Generate error");
+        setError(parsed?.error ?? "Analyze error");
         setErrorDetails(parsed);
         return;
       }
 
-      setFinalAnswer(parsed);
+      setResult(parsed);
     } catch (e: any) {
       setError(String(e?.message ?? e));
     } finally {
-      setLoadingFinal(false);
+      setLoadingAnalyze(false);
     }
   }
 
   async function onDownloadDocx() {
-    if (!finalAnswer || finalAnswer?.type !== "answer") return;
+    if (!result || result?.type !== "answer") return;
 
     setDownloading(true);
     setError(null);
@@ -243,7 +152,7 @@ export default function CaseReaderPage() {
       const res = await fetch("/api/case-reader/docx", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ case_reader_output: finalAnswer }),
+        body: JSON.stringify({ case_reader_output: result }),
       });
 
       if (!res.ok) {
@@ -271,7 +180,7 @@ export default function CaseReaderPage() {
     <div style={{ maxWidth: 980, margin: "0 auto", padding: 24 }}>
       <h1 style={{ fontSize: 28, fontWeight: 700 }}>Case Reader</h1>
       <p style={{ opacity: 0.9 }}>
-        Flux: <b>Upload → Extraction → Aperçu à confirmer → Génération → Export DOCX</b>
+        Flux: <b>Upload → Extraction → Analyse → Export DOCX</b>
       </p>
 
       <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
@@ -289,8 +198,7 @@ export default function CaseReaderPage() {
         </label>
 
         <label>
-          Cours:{" "}
-          <input value={courseSlug} onChange={(e) => setCourseSlug(e.target.value)} />
+          Cours: <input value={courseSlug} onChange={(e) => setCourseSlug(e.target.value)} />
         </label>
 
         <label>
@@ -302,8 +210,7 @@ export default function CaseReaderPage() {
               const f = e.target.files?.[0] ?? null;
               setFile(f);
               setExtractedText("");
-              setPreview(null);
-              setFinalAnswer(null);
+              setResult(null);
               setError(null);
               setErrorDetails(null);
               setStatus(null);
@@ -317,12 +224,8 @@ export default function CaseReaderPage() {
             {loadingExtract ? "Extraction..." : "1) Extraire le texte"}
           </button>
 
-          <button onClick={onPreview} disabled={!canPreview || loadingPreview}>
-            {loadingPreview ? "Analyse (aperçu)..." : "2) Analyser (aperçu)"}
-          </button>
-
-          <button onClick={onGenerateConfirmed} disabled={!canGenerate || loadingFinal}>
-            {loadingFinal ? "Génération..." : "3) Confirmer & Générer"}
+          <button onClick={onAnalyze} disabled={!canAnalyze}>
+            {loadingAnalyze ? "Analyse..." : "2) Analyser"}
           </button>
 
           {canDownload && (
@@ -359,106 +262,13 @@ export default function CaseReaderPage() {
           </details>
         )}
 
-        {preview && (
+        {result && (
           <div style={{ border: "1px solid #444", padding: 16, borderRadius: 10 }}>
-            <h2 style={{ marginTop: 0 }}>Aperçu à confirmer</h2>
-
-            {/* Scope first */}
-            <h3>6) Portée (cours) + En examen (aperçu)</h3>
-            <div style={{ whiteSpace: "pre-wrap" }}>
-              <b>Cours:</b> {preview.preview?.scope_course_first?.course ?? courseSlug}
-              <div style={{ marginTop: 8 }}>
-                {preview.preview?.scope_course_first?.what_it_changes ?? ""}
-              </div>
-              {preview.preview?.scope_course_first?.codification_if_any && (
-                <div style={{ marginTop: 8 }}>
-                  <b>Codification:</b> {preview.preview.scope_course_first.codification_if_any}
-                </div>
-              )}
-            </div>
-
-            <h4>En examen, si tu vois…</h4>
-            <div>{preview.preview?.scope_course_first?.exam_spotting_box?.trigger ?? ""}</div>
-
-            <h4>Fais ça</h4>
-            <ul>
-              {(preview.preview?.scope_course_first?.exam_spotting_box?.do_this ?? []).map((x, i) => (
-                <li key={i}>{x}</li>
-              ))}
-            </ul>
-
-            <h4>Pièges</h4>
-            <ul>
-              {(preview.preview?.scope_course_first?.exam_spotting_box?.pitfalls ?? []).map((x, i) => (
-                <li key={i}>{x}</li>
-              ))}
-            </ul>
-
-            <hr style={{ margin: "16px 0" }} />
-
-            <h3>1) Contexte (texte cohérent)</h3>
-            <div style={{ whiteSpace: "pre-wrap" }}>{preview.preview?.context_text ?? ""}</div>
-
-            <h3>2) Faits essentiels</h3>
-            <ul>
-              {(preview.preview?.key_facts ?? []).map((k, i) => (
-                <li key={i}>
-                  <b>{k.fact}</b>
-                  {k.why_it_matters ? <div style={{ opacity: 0.9 }}>Pourquoi: {k.why_it_matters}</div> : null}
-                </li>
-              ))}
-            </ul>
-
-            <h3>3) Questions en litige</h3>
-            <ul>
-              {(preview.preview?.issues ?? []).map((it, i) => (
-                <li key={i}>{it.issue}</li>
-              ))}
-            </ul>
-
-            <h3>4) Règles / Tests (candidats)</h3>
-            <ul>
-              {(preview.preview?.rules_tests ?? []).map((it, i) => (
-                <li key={i}>
-                  <b>{it.kind.toUpperCase()}:</b> {it.item}
-                </li>
-              ))}
-            </ul>
-
-            <h3>5) Application / Raisonnement (résumé)</h3>
-            <ul>
-              {(preview.preview?.reasoning ?? []).map((it, i) => (
-                <li key={i}>{it.step}</li>
-              ))}
-            </ul>
-
-            {preview.preview?.uncertainties?.length ? (
-              <>
-                <h3>Incertitudes / à vérifier</h3>
-                <ul>
-                  {preview.preview.uncertainties.map((u, i) => (
-                    <li key={i}>{u}</li>
-                  ))}
-                </ul>
-              </>
-            ) : null}
-
-            <details style={{ marginTop: 12 }}>
-              <summary>Voir preview JSON brut</summary>
-              <pre style={{ whiteSpace: "pre-wrap", padding: 12, background: "#111", color: "#eee" }}>
-                {JSON.stringify(preview, null, 2)}
-              </pre>
-            </details>
-          </div>
-        )}
-
-        {finalAnswer && (
-          <div style={{ border: "1px solid #444", padding: 16, borderRadius: 10 }}>
-            <h2 style={{ marginTop: 0 }}>Résultat final</h2>
+            <h2 style={{ marginTop: 0 }}>Résultat</h2>
             <details>
               <summary>Voir JSON brut</summary>
               <pre style={{ whiteSpace: "pre-wrap", padding: 12, background: "#111", color: "#eee" }}>
-                {JSON.stringify(finalAnswer, null, 2)}
+                {JSON.stringify(result, null, 2)}
               </pre>
             </details>
           </div>
