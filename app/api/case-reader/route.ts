@@ -25,10 +25,6 @@ const MAX_CASE_TEXT_CHARS = Number(process.env.MAX_CASE_TEXT_CHARS ?? 120_000);
 const schemaPath = path.join(process.cwd(), "schemas", "case-reader-v2.schema.json");
 const canonicalSchema = JSON.parse(fs.readFileSync(schemaPath, "utf-8"));
 
-/**
- * Convertit un JSON Schema complet (Draft 2020-12) en sous-ensemble compatible Structured Outputs OpenAI.
- * IMPORTANT: ne force pas "required" pour toutes les propriétés (sinon tu rends tout obligatoire).
- */
 function toOpenAISchema(node: any): any {
   if (Array.isArray(node)) return node.map(toOpenAISchema);
   if (!node || typeof node !== "object") return node;
@@ -47,7 +43,6 @@ function toOpenAISchema(node: any): any {
     "const",
     "default",
     "examples",
-    // Ces contraintes peuvent être refusées par Structured Outputs selon les versions:
     "minLength",
     "maxLength",
     "pattern",
@@ -61,16 +56,12 @@ function toOpenAISchema(node: any): any {
     out[k] = toOpenAISchema(v);
   }
 
-  // Normalisation objets
   if (out.type === "object" && out.properties && typeof out.properties === "object") {
-    // Structured outputs aime bien additionalProperties=false
     out.additionalProperties = false;
 
-    // Conserver "required" s’il existait dans le schema original
-    // (ne pas le recalculer à partir de toutes les propriétés)
+    // Conserver required si présent, sinon ne pas l’inventer
     if (Array.isArray((node as any).required)) {
       const req = (node as any).required.filter((k: any) => typeof k === "string");
-      // Ne garder que les keys qui existent encore
       const props = new Set(Object.keys(out.properties));
       out.required = req.filter((k: string) => props.has(k));
     }
@@ -80,7 +71,6 @@ function toOpenAISchema(node: any): any {
     }
   }
 
-  // Normalisation arrays
   if (out.type === "array" && out.items) {
     out.items = toOpenAISchema(out.items);
   }
@@ -107,7 +97,6 @@ type InputBody = {
   jurisdiction_hint?: string;
   court_hint?: string;
   decision_date_hint?: string;
-  // Upload-only enforcement
   source_kind?: "pdf" | "docx";
   filename?: string;
 };
@@ -120,13 +109,10 @@ function extractOutputText(respJson: any): string | null {
   const out = respJson?.output;
   if (!Array.isArray(out)) return null;
 
-  // Responses API peut renvoyer des items type "message"
   const msg = out.find((x: any) => x?.type === "message" && Array.isArray(x?.content));
   if (!msg) return null;
 
-  const parts = msg.content.filter(
-    (p: any) => p?.type === "output_text" && typeof p?.text === "string"
-  );
+  const parts = msg.content.filter((p: any) => p?.type === "output_text" && typeof p?.text === "string");
   const text = parts.map((p: any) => p.text).join("");
   return text || null;
 }
@@ -194,7 +180,6 @@ function normalizeClarify(parsed: any) {
   };
 }
 
-// ---------- URL redaction (NE PAS BLOQUER l’utilisateur) ----------
 function redactUrls(s: string) {
   return s
     .replace(/https?:\/\/\S+/gi, "[LIEN SUPPRIMÉ]")
@@ -232,11 +217,6 @@ function sanitizeUrlsInOutput(out: any) {
   }
 }
 
-/**
- * Applique toutes les protections sur une réponse "answer"
- * - IDs anchors conformes au pattern
- * - redaction des URLs (partout)
- */
 function applyAnswerGuards(parsed: any) {
   sanitizeAnchorIds(parsed);
   sanitizeUrlsInOutput(parsed);
@@ -266,15 +246,12 @@ async function callOpenAIResponses(payload: any): Promise<{ ok: boolean; status:
   }
 }
 
-function buildPrimaryPayload(developerPrompt: string, userPayload: any) {
+function buildPrimaryPayloadStructured(systemPrompt: string, userPayload: any) {
   return {
     model: MODEL,
     store: false,
     input: [
-      {
-        role: "developer",
-        content: [{ type: "input_text", text: developerPrompt }],
-      },
+      { role: "system", content: [{ type: "input_text", text: systemPrompt }] },
       {
         role: "user",
         content: [
@@ -298,15 +275,37 @@ function buildPrimaryPayload(developerPrompt: string, userPayload: any) {
   };
 }
 
-function buildRepairPayload(developerPrompt: string, raw: string, errors: any) {
+/**
+ * Fallback sans Structured Outputs (quand OpenAI refuse le payload/schema).
+ * On demande du JSON uniquement, puis on parse et on valide avec AJV.
+ */
+function buildPrimaryPayloadPlain(systemPrompt: string, userPayload: any) {
   return {
     model: MODEL,
     store: false,
     input: [
+      { role: "system", content: [{ type: "input_text", text: systemPrompt }] },
       {
-        role: "developer",
-        content: [{ type: "input_text", text: developerPrompt }],
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text:
+              "Retourne UNIQUEMENT du JSON (aucun texte autour), conforme au schéma. Si info critique manque: type='clarify' + 1-3 questions.\n\n" +
+              JSON.stringify(userPayload),
+          },
+        ],
       },
+    ],
+  };
+}
+
+function buildRepairPayload(systemPrompt: string, raw: string, errors: any) {
+  return {
+    model: MODEL,
+    store: false,
+    input: [
+      { role: "system", content: [{ type: "input_text", text: systemPrompt }] },
       {
         role: "user",
         content: [
@@ -345,24 +344,31 @@ function safeJsonParse(raw: string): any | null {
   }
 }
 
+function isLikelySchemaOrPayloadError(openaiJson: any): boolean {
+  const msg = String(openaiJson?.error?.message ?? "").toLowerCase();
+  // On ne devine pas la cause exacte; on ne fait que détecter des mots-clés.
+  return (
+    msg.includes("json_schema") ||
+    msg.includes("schema") ||
+    msg.includes("structured") ||
+    msg.includes("invalid") ||
+    msg.includes("unrecognized") ||
+    msg.includes("must be") ||
+    msg.includes("format")
+  );
+}
+
 export async function POST(req: Request) {
   try {
     if (!OPENAI_API_KEY) {
-      return NextResponse.json(
-        { error: "OPENAI_API_KEY manquant" },
-        { status: 500, headers: CORS_HEADERS }
-      );
+      return NextResponse.json({ error: "OPENAI_API_KEY manquant" }, { status: 500, headers: CORS_HEADERS });
     }
 
     const body = (await req.json().catch(() => null)) as InputBody | null;
     if (!body?.case_text || !body?.output_mode) {
-      return NextResponse.json(
-        { error: "Missing case_text or output_mode" },
-        { status: 400, headers: CORS_HEADERS }
-      );
+      return NextResponse.json({ error: "Missing case_text or output_mode" }, { status: 400, headers: CORS_HEADERS });
     }
 
-    // Upload-only enforcement (UI + API): this endpoint expects text extracted from a PDF/DOCX.
     if (body.source_kind !== "pdf" && body.source_kind !== "docx") {
       return NextResponse.json(
         { error: "Upload requis: fournissez un PDF ou DOCX (source_kind='pdf'|'docx')." },
@@ -372,18 +378,12 @@ export async function POST(req: Request) {
 
     if (body.case_text.length > MAX_CASE_TEXT_CHARS) {
       return NextResponse.json(
-        {
-          error: "case_text trop long",
-          max_chars: MAX_CASE_TEXT_CHARS,
-          received_chars: body.case_text.length,
-        },
+        { error: "case_text trop long", max_chars: MAX_CASE_TEXT_CHARS, received_chars: body.case_text.length },
         { status: 413, headers: CORS_HEADERS }
       );
     }
 
-    // ---------- Codification injection (source autorisée interne) ----------
     const codMatch = findBestCodificationMatch(body.case_text);
-
     const codificationLines: string[] = [];
     if (codMatch) {
       const r = codMatch.record;
@@ -401,8 +401,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // Prompt final developer = prompt de base + (optionnel) note de codification
-    const developerPrompt = [buildDroitisSystemPrompt(), "", ...codificationLines]
+    const systemPrompt = [buildDroitisSystemPrompt(), "", ...codificationLines]
       .filter((x) => typeof x === "string" && x.trim().length > 0)
       .join("\n");
 
@@ -419,12 +418,20 @@ export async function POST(req: Request) {
       filename: body.filename,
     };
 
-    // -------- 1) Primary call --------
-    const r1 = await callOpenAIResponses(buildPrimaryPayload(developerPrompt, userPayload));
+    // ---- Primary (Structured) ----
+    let r1 = await callOpenAIResponses(buildPrimaryPayloadStructured(systemPrompt, userPayload));
+
+    // ✅ si OpenAI refuse le schema/payload, fallback plain (JSON demandé)
+    if (!r1.ok && r1.status === 400 && isLikelySchemaOrPayloadError(r1.json)) {
+      r1 = await callOpenAIResponses(buildPrimaryPayloadPlain(systemPrompt, userPayload));
+    }
+
     if (!r1.ok) {
+      // IMPORTANT: on propage le vrai status OpenAI au lieu de 502 systématique
+      const status = Number.isFinite(r1.status) && r1.status >= 400 ? r1.status : 502;
       return NextResponse.json(
         { error: "OpenAI responses error", status: r1.status, resp: r1.json },
-        { status: 502, headers: CORS_HEADERS }
+        { status, headers: CORS_HEADERS }
       );
     }
 
@@ -436,78 +443,57 @@ export async function POST(req: Request) {
       );
     }
 
-    // -------- 2) Parse primary JSON --------
     let parsed: any | null = safeJsonParse(raw1);
 
     if (!parsed) {
-      // -------- 3) Repair if parse failed --------
-      const r2 = await callOpenAIResponses(
-        buildRepairPayload(developerPrompt, raw1, { parse: "failed" })
-      );
-
+      const r2 = await callOpenAIResponses(buildRepairPayload(systemPrompt, raw1, { parse: "failed" }));
       if (!r2.ok) {
+        const status = Number.isFinite(r2.status) && r2.status >= 400 ? r2.status : 502;
         return NextResponse.json(
           { error: "OpenAI repair error", status: r2.status, resp: r2.json },
-          { status: 502, headers: CORS_HEADERS }
+          { status, headers: CORS_HEADERS }
         );
       }
 
       const raw2 = extractOutputText(r2.json);
       if (!raw2) {
-        return NextResponse.json(
-          { error: "Empty output_text from repair", resp: r2.json },
-          { status: 502, headers: CORS_HEADERS }
-        );
+        return NextResponse.json({ error: "Empty output_text from repair", resp: r2.json }, { status: 502, headers: CORS_HEADERS });
       }
 
       parsed = safeJsonParse(raw2);
       if (!parsed) {
-        return NextResponse.json(
-          { error: "Repair output still not valid JSON", raw: raw2 },
-          { status: 502, headers: CORS_HEADERS }
-        );
+        return NextResponse.json({ error: "Repair output still not valid JSON", raw: raw2 }, { status: 502, headers: CORS_HEADERS });
       }
     }
 
-    // Clarify => retour minimal (pas d’AJV strict sur anchors, etc.)
     if (parsed?.type === "clarify") {
       return NextResponse.json(normalizeClarify(parsed), { status: 200, headers: CORS_HEADERS });
     }
 
-    // Answer guards (IDs + URL redaction)
     applyAnswerGuards(parsed);
 
-    // -------- 4) Ajv validation --------
     let ok = validate(parsed) as boolean;
     if (ok) {
       return NextResponse.json(parsed, { status: 200, headers: CORS_HEADERS });
     }
 
-    // -------- 5) Repair once if schema fails --------
-    const r3 = await callOpenAIResponses(
-      buildRepairPayload(developerPrompt, JSON.stringify(parsed), validate.errors)
-    );
+    const r3 = await callOpenAIResponses(buildRepairPayload(systemPrompt, JSON.stringify(parsed), validate.errors));
     if (!r3.ok) {
+      const status = Number.isFinite(r3.status) && r3.status >= 400 ? r3.status : 502;
       return NextResponse.json(
         { error: "OpenAI repair error", status: r3.status, resp: r3.json, errors: validate.errors },
-        { status: 502, headers: CORS_HEADERS }
+        { status, headers: CORS_HEADERS }
       );
     }
 
     const raw3 = extractOutputText(r3.json);
     if (!raw3) {
-      return NextResponse.json(
-        { error: "Empty output_text from schema repair", resp: r3.json, errors: validate.errors },
-        { status: 502, headers: CORS_HEADERS }
-      );
+      return NextResponse.json({ error: "Empty output_text from schema repair", resp: r3.json }, { status: 502, headers: CORS_HEADERS });
     }
 
     const parsed3 = safeJsonParse(raw3);
     if (!parsed3) {
-      return NextResponse.json(
-        { error: "Repair output not valid JSON", raw: raw3, errors: validate.errors },
-        { status: 502, headers: CORS_HEADERS }
-      );
+      return NextResponse.json({ error: "Repair output not valid JSON", raw: raw3 }, { status: 502, headers: CORS_HEADERS });
     }
 
     if (parsed3?.type === "clarify") {
@@ -528,9 +514,6 @@ export async function POST(req: Request) {
   } catch (e: any) {
     const msg = e?.name === "AbortError" ? "OpenAI timeout" : String(e?.message ?? e);
     console.error(e);
-    return NextResponse.json(
-      { error: "Unhandled error", details: msg },
-      { status: 500, headers: CORS_HEADERS }
-    );
+    return NextResponse.json({ error: "Unhandled error", details: msg }, { status: 500, headers: CORS_HEADERS });
   }
 }

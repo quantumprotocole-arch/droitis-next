@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import "@napi-rs/canvas";
 import mammoth from "mammoth";
 
 export const runtime = "nodejs";
@@ -19,28 +18,11 @@ const MAX_FILE_BYTES = Number(process.env.MAX_FILE_BYTES ?? 10 * 1024 * 1024); /
 const MAX_TEXT_CHARS = Number(process.env.MAX_EXTRACTED_TEXT_CHARS ?? 140_000);
 
 function normalizeText(s: string) {
-  return s
+  return String(s ?? "")
     .replace(/\r/g, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-}
-
-async function parsePdfBuffer(buf: Buffer): Promise<string> {
-  const mod: any = await import("pdf-parse");
-  const pdfParseFn = mod?.default ?? mod;
-  if (typeof pdfParseFn !== "function") throw new Error("pdf-parse export is not a function.");
-
-  try {
-    const out = await pdfParseFn(buf);
-    return out?.text ?? "";
-  } catch (e: any) {
-    const msg = String(e?.message ?? e);
-    if (msg.includes("@napi-rs/canvas")) {
-      throw new Error("PDF extraction requires @napi-rs/canvas on server. Install it and externalize it in next.config.");
-    }
-    throw e;
-  }
 }
 
 export async function POST(req: Request) {
@@ -70,22 +52,28 @@ export async function POST(req: Request) {
       mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
       name.endsWith(".docx");
 
-    let text = "";
+    // MVP: PDF extraction côté navigateur uniquement
+    if (isPdf) {
+      return NextResponse.json(
+        { error: "PDF: extraction côté navigateur uniquement (upload un PDF texte)." },
+        { status: 415, headers: CORS_HEADERS }
+      );
+    }
 
-   if (isPdf) {
-  return NextResponse.json(
-    { error: "PDF: extraction côté navigateur uniquement (upload un PDF texte ou copie-colle le texte)." },
-    { status: 415, headers: CORS_HEADERS }
-  );
-}
-    text = normalizeText(text);
+    if (!isDocx) {
+      return NextResponse.json(
+        { error: "Unsupported file type. Please upload a .docx or .pdf." },
+        { status: 415, headers: CORS_HEADERS }
+      );
+    }
+
+    // ✅ DOCX extraction server-side
+    const result = await mammoth.extractRawText({ buffer: buf });
+    let text = normalizeText(result?.value ?? "");
 
     if (!text) {
       return NextResponse.json(
-        {
-          error:
-            "No extractable text found. (PDF scanné/image-only?) — colle le texte ou utilise un PDF texte."
-        },
+        { error: "No extractable text found in DOCX. (Document vide ou contenu non textuel?)" },
         { status: 422, headers: CORS_HEADERS }
       );
     }
