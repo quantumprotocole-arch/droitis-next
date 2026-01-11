@@ -18,7 +18,7 @@ const MAX_FILE_BYTES = Number(process.env.MAX_FILE_BYTES ?? 10 * 1024 * 1024); /
 const MAX_TEXT_CHARS = Number(process.env.MAX_EXTRACTED_TEXT_CHARS ?? 140_000);
 
 function normalizeText(s: string) {
-  return String(s ?? "")
+  return s
     .replace(/\r/g, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
@@ -44,36 +44,35 @@ export async function POST(req: Request) {
     const name = (file.name || "").toLowerCase();
     const mime = (file.type || "").toLowerCase();
 
-    const arrayBuffer = await file.arrayBuffer();
-    const buf = Buffer.from(arrayBuffer);
-
     const isPdf = mime === "application/pdf" || name.endsWith(".pdf");
     const isDocx =
       mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
       name.endsWith(".docx");
 
-    // MVP: PDF extraction côté navigateur uniquement
     if (isPdf) {
+      // MVP: PDF extraction côté navigateur uniquement
       return NextResponse.json(
-        { error: "PDF: extraction côté navigateur uniquement (upload un PDF texte)." },
+        { error: "PDF: extraction côté navigateur uniquement (PDF texte requis)." },
         { status: 415, headers: CORS_HEADERS }
       );
     }
 
     if (!isDocx) {
       return NextResponse.json(
-        { error: "Unsupported file type. Please upload a .docx or .pdf." },
+        { error: "Format non supporté. Utilise un fichier .pdf ou .docx." },
         { status: 415, headers: CORS_HEADERS }
       );
     }
 
-    // ✅ DOCX extraction server-side
-    const result = await mammoth.extractRawText({ buffer: buf });
-    let text = normalizeText(result?.value ?? "");
+    const arrayBuffer = await file.arrayBuffer();
+    const buf = Buffer.from(arrayBuffer);
+
+    const out = await mammoth.extractRawText({ buffer: buf });
+    let text = normalizeText(out?.value ?? "");
 
     if (!text) {
       return NextResponse.json(
-        { error: "No extractable text found in DOCX. (Document vide ou contenu non textuel?)" },
+        { error: "No extractable text found in DOCX." },
         { status: 422, headers: CORS_HEADERS }
       );
     }
