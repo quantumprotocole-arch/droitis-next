@@ -144,6 +144,13 @@ function makeExcerpt(text: string, maxLen = 900): string {
   return t.slice(0, maxLen) + "…";
 }
 
+function goalMode(user_goal: string | null): "exam" | "case" | "learn" {
+  const g = (user_goal ?? "").toLowerCase();
+  if (g.includes("examen") || g.includes("exam")) return "exam";
+  if (g.includes("cas") || g.includes("pratique") || g.includes("case")) return "case";
+  return "learn";
+}
+
 // ------------------------------
 // Jurisdiction + domain signals (no-block, majority unless exception)
 // ------------------------------
@@ -558,6 +565,20 @@ function detectDomain(message: string): Domain {
   if (containsAny(s, civil)) return "Civil";
 
   return "Inconnu";
+}
+
+function domainByCourseSlug(course_slug: string | null): Domain | null {
+  const s = (course_slug ?? "").toLowerCase().trim();
+  if (!s) return null;
+
+  // Obligations I (formation des contrats) => Civil
+  if (s === "obligations-formation-des-contrats") return "Civil";
+
+  // Responsabilité civile => Civil
+  if (s === "responsabilite-civile") return "Civil";
+
+  // extensible plus tard (sans casser)
+  return null;
 }
 
 
@@ -1515,6 +1536,8 @@ if (!user_goal) risk_flags.missing_user_goal = true;
     const profile = body.profile ?? null;
     const top_k = clamp(body.top_k ?? 7, 5, 8);
     const mode = (body.mode ?? "prod").toLowerCase();
+    const gmode = goalMode(user_goal);
+
 if (!course_slug || !user_goal) {
   const clarify =
     "Pour que je réponde selon ton cours : quel est ton **course_slug** (ou le nom du cours) et ton **objectif** (examen / comprendre / cas-pratique) ?";
@@ -1553,9 +1576,13 @@ if (!course_slug || !user_goal) {
     // ------------------------------
     // Domain + Jurisdiction (NO-BLOCK)
     // ------------------------------
-    const domain_detected = detectDomain(message);
-    const gate = jurisdictionGateNoBlock(message, domain_detected);
-    const jurisdiction_expected = gate.selected;
+      let domain_detected = detectDomain(message);
+      const forced = domainByCourseSlug(course_slug);
+      if (forced && domain_detected === "Inconnu") domain_detected = forced;
+
+      const gate = jurisdictionGateNoBlock(message, domain_detected);
+      const jurisdiction_expected = gate.selected;
+
 
     // ------------------------------
     // Embedding + hybrid retrieval (RPC ONLY — 1 call, no filter to allow mixed where needed)
@@ -1569,15 +1596,20 @@ if (!course_slug || !user_goal) {
 let kernelHits: KernelHit[] = [];
 let kernelsWarning: string | null = null;
 
+const allowKernels = gmode === "exam" || gmode === "case";
+
 try {
-  kernelHits = await callRpc<KernelHit>("search_course_kernels", {
-    query_embedding: queryEmbedding,
-    p_course_slug: course_slug as string,
-    match_count: 6,
-  });
+  if (allowKernels) {
+    kernelHits = await callRpc<KernelHit>("search_course_kernels", {
+      query_embedding: queryEmbedding,
+      p_course_slug: course_slug as string,
+      match_count: 6,
+    });
+  }
 } catch (e: any) {
   kernelsWarning = e?.message ? String(e.message) : String(e);
 }
+
 
 const kernelContext =
   kernelHits.length > 0
@@ -1625,6 +1657,9 @@ const distinctionsContext =
         })
         .join("\n---\n")
     : "(aucune distinction)";
+    const minPriority = gmode === "learn" ? 90 : 0;
+distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority);
+
 
     // ------------------------------
     // Pass ordering prioritizes expected, but still explores
