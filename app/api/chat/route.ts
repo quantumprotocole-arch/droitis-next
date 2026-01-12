@@ -68,6 +68,17 @@ type KernelHit = {
   similarity: number;
 };
 
+type DistinctionRow = {
+  id: string;
+  course_slug: string;
+  concept_a: string;
+  concept_b: string;
+  rule_of_thumb: string;
+  pitfalls: string[] | null;
+  when_it_matters: string[] | null;
+  priority: number;
+};
+
 
 // ------------------------------
 // Env
@@ -125,6 +136,7 @@ function containsAny(hay: string, needles: string[]) {
   }
   return false;
 }
+
 
 function makeExcerpt(text: string, maxLen = 900): string {
   const t = (text || "").replace(/\s+/g, " ").trim();
@@ -1168,6 +1180,25 @@ async function hybridSearchRPC(args: {
     return await callRpc<HybridHit>("search_legal_vectors_hybrid_v1", payload);
   }
 }
+async function fetchTopDistinctions(course_slug: string, limit = 8): Promise<DistinctionRow[]> {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/concept_distinctions?select=id,course_slug,concept_a,concept_b,rule_of_thumb,pitfalls,when_it_matters,priority&course_slug=eq.${encodeURIComponent(
+      course_slug
+    )}&order=priority.desc&limit=${limit}`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY!,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY!}`,
+      },
+    }
+  );
+
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`fetchTopDistinctions failed: ${res.status} ${t}`);
+  }
+  return (await res.json()) as DistinctionRow[];
+}
 
 // ------------------------------
 // Prompt + output checks — "verrouillé" + no-hallucination + no-block
@@ -1579,6 +1610,21 @@ const kernelContext =
       console.warn("hybridSearchRPC failed:", hybridError);
       hybridHits = [];
     }
+    let distinctions: DistinctionRow[] = [];
+try {
+  distinctions = await fetchTopDistinctions(course_slug as string, 8);
+} catch (e: any) {
+  console.warn("distinctions fetch failed:", e?.message ?? e);
+}
+const distinctionsContext =
+  distinctions.length
+    ? distinctions
+        .map((d, i) => {
+          const pits = (d.pitfalls ?? []).slice(0, 4).map((x) => `- ${x}`).join("\n");
+          return `DISTINCTION ${i + 1}: ${d.concept_a} vs ${d.concept_b} (priority=${d.priority})\nRule: ${d.rule_of_thumb}\nPitfalls:\n${pits || "- (none)"}`;
+        })
+        .join("\n---\n")
+    : "(aucune distinction)";
 
     // ------------------------------
     // Pass ordering prioritizes expected, but still explores
@@ -1839,6 +1885,7 @@ const kernelContext =
           latency_ms: Date.now() - startedAt,
           kernels_count: kernelHits.length,
           debugPasses,
+          distinctions_count: distinctions.length,
         },
 
         user_id: user.id,
@@ -1893,6 +1940,10 @@ const kernelContext =
       `Juridiction attendue (heuristique): ${jurisdiction_expected}`,
       `Juridiction sélectionnée (système): ${jurisdiction_selected}`,
       `Juridiction verrouillée (lock): ${gate.lock}`,
+      "Concept distinctions (guides internes; NON des sources; NE PAS citer):",
+distinctionsContext,
+"",
+
       gate.pitfall_keyword ? `Exception/piège détecté: ${gate.pitfall_keyword}` : "",
       `Hypothèse syndicat (si non mentionné => non syndiqué): union_assumed=${gate.assumptions.union_assumed}`,
       `Signaux QA: relevance_ok=${relevance_ok} ; coverage_ok=${coverage_ok} ; rag_quality=${rag_quality}`,
@@ -1923,6 +1974,7 @@ const kernelContext =
       kernelHits.length ? "- Priorité: si des course kernels sont fournis, utilise-les comme structure (plan/étapes/pièges) et adapte aux faits." : "",
       kernelHits.length ?   "- OBLIGATION: commence l'Application par un mini 'Plan d'examen' en 3–6 puces, basé sur les course kernels fournis (reprendre leurs étapes/pièges), puis adapte aux faits."
   : "",
+  distinctions.length ? "- Si une distinction pertinente est fournie, intègre explicitement 1–2 'pitfalls à éviter' dans l'Application." : "",
 
       "",
       "INSTRUCTIONS DE SORTIE (JSON strict, uniquement):",
@@ -2187,6 +2239,7 @@ RÈGLES:
         missing_coverage: parsed.missing_coverage ?? [],
         hybrid_error: hybridError,
         kernels_count: kernelHits.length,
+        distinctions_count: distinctions.length,
       },
     });
   } catch (e: any) {
