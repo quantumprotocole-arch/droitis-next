@@ -1921,6 +1921,8 @@ const kernelContext =
       "- Ne mentionne aucun article/arrêt/lien/test précis hors allowlist.",
       "- No-block: si un fait manque, applique l’hypothèse commune et mentionne-la (pas de question bloquante).",
       kernelHits.length ? "- Priorité: si des course kernels sont fournis, utilise-les comme structure (plan/étapes/pièges) et adapte aux faits." : "",
+      kernelHits.length ?   "- OBLIGATION: commence l'Application par un mini 'Plan d'examen' en 3–6 puces, basé sur les course kernels fournis (reprendre leurs étapes/pièges), puis adapte aux faits."
+  : "",
 
       "",
       "INSTRUCTIONS DE SORTIE (JSON strict, uniquement):",
