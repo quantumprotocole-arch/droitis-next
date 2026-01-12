@@ -1,0 +1,14 @@
+{
+  "kernels": [
+    {
+      "course_slug": "obligations-contrat",
+      "topic": "Distinction résiliation vs résolution (examen)",
+      "content": "Cadre d’examen: (1) Identifier type de contrat (instantané vs exécution successive). (2) Identifier manquement (inexécution). (3) Effet recherché: anéantissement rétroactif vs cessation pour l’avenir. (4) Conditions: mise en demeure / inexécution suffisamment grave (selon le cas). (5) Remèdes connexes: dommages, réduction, etc. Pièges: confondre vocabulaire courant et effets juridiques; oublier d’ancrer aux faits."
+    },
+    {
+      "course_slug": "responsabilite-civile",
+      "topic": "Check-list responsabilité civile (méthode)",
+      "content": "Plan: (1) Fait générateur, (2) Faute (standard), (3) Préjudice (certain, direct), (4) Lien causal, (5) Causes d’exonération/partage, (6) Réparation. Erreurs fréquentes: mélanger causalité et prévisibilité; oublier la preuve; sauter l’exonération."
+    }
+  ]
+}

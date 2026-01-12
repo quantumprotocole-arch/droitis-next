@@ -59,6 +59,14 @@ type ChatRequest = {
   messages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
 };
 
+type KernelHit = {
+  id: string;
+  course_slug: string;
+  topic: string;
+  content: string;
+  similarity: number;
+};
+
 
 // ------------------------------
 // Env
@@ -1222,12 +1230,31 @@ function enforceAllowedSourceIds(parsed: ModelJson, allowed: string[]): { ok: bo
 
 function buildAllowedCitationText(sources: Source[]): string {
   const uniq = new Set<string>();
+  const add = (s: string) => {
+    const v = (s ?? "").trim().toLowerCase();
+    if (v) uniq.add(v);
+  };
+
   for (let i = 0; i < sources.length; i++) {
     const c = (sources[i].citation ?? "").trim();
-    if (c) uniq.add(c);
+    if (!c) continue;
+
+    add(c);
+
+    // Normalisation: si la citation contient un numéro d'article, ajouter variantes
+    const m = c.match(/\b(?:art\.?|article)\s*([0-9]{1,5})\b/i);
+    if (m?.[1]) {
+      const n = m[1];
+      add(`art. ${n}`);
+      add(`art ${n}`);
+      add(`article ${n}`);
+    }
   }
-  return Array.from(uniq).join(" | ").toLowerCase();
+
+  // string "flat" pour includes()
+  return Array.from(uniq).join(" | ");
 }
+
 
 function redactUnsupportedRefs(text: string, allowedCitationsLower: string): { text: string; redactions: string[] } {
   let out = text ?? "";
@@ -1503,6 +1530,32 @@ if (!course_slug || !user_goal) {
     // ------------------------------
     const queryEmbedding = await createEmbedding(message);
     if (!queryEmbedding) return json({ error: "Échec embedding" }, 500);
+
+    // ------------------------------
+// Course kernels retrieval (Phase 4D — internal guides, NOT sources)
+// ------------------------------
+let kernelHits: KernelHit[] = [];
+let kernelsWarning: string | null = null;
+
+try {
+  kernelHits = await callRpc<KernelHit>("search_course_kernels", {
+    query_embedding: queryEmbedding,
+    p_course_slug: course_slug,
+    match_count: 6,
+  });
+} catch (e: any) {
+  kernelsWarning = e?.message ? String(e.message) : String(e);
+}
+
+const kernelContext =
+  kernelHits.length > 0
+    ? kernelHits
+        .map(
+          (k, i) =>
+            `KERNEL ${i + 1} (topic=${k.topic}; sim=${Number(k.similarity ?? 0).toFixed(3)}):\n${k.content}`
+        )
+        .join("\n---\n")
+    : "(aucun kernel)";
 
     const baseKeywords = extractKeywords(message, 10);
     const { keywords } = expandQuery(message, baseKeywords, jurisdiction_expected, gate.assumptions.union_assumed);
@@ -1839,6 +1892,12 @@ if (!course_slug || !user_goal) {
       cov.missing_coverage?.length ? `missing_coverage (pré-calculé):\n- ${cov.missing_coverage.join("\n- ")}` : "missing_coverage (pré-calculé): (aucun)",
       cov.ingest_needed?.length ? `ingest_needed (pré-calculé):\n- ${cov.ingest_needed.join("\n- ")}` : "ingest_needed (pré-calculé): (aucun)",
       "",
+      kernelsWarning ? `KERNELS_WARNING: ${kernelsWarning}` : "",
+"",
+"Course kernels (guides pédagogiques internes; NON des sources de droit; NE PAS les citer):",
+kernelContext,
+"",
+
       "Contexte (extraits):",
       context,
       "",
