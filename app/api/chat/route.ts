@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 import { NextResponse } from "next/server";
-import { createClient } from "../../../lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
+
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -1504,7 +1505,7 @@ if (!course_slug || !user_goal) {
         missing_coverage: ["course_slug ou user_goal manquant"],
       },
     },
-    usage: { mode, top_k, latency_ms: Date.now() - startedAt, type: "clarify" },
+    usage: { mode, top_k, latency_ms: Date.now() - startedAt, type: "clarify", kernels_count: 0 },
     user_id: user.id,
   }).catch((e) => console.warn("log insert failed:", e));
 
@@ -1540,7 +1541,7 @@ let kernelsWarning: string | null = null;
 try {
   kernelHits = await callRpc<KernelHit>("search_course_kernels", {
     query_embedding: queryEmbedding,
-    p_course_slug: course_slug,
+    p_course_slug: course_slug as string,
     match_count: 6,
   });
 } catch (e: any) {
@@ -1832,7 +1833,14 @@ const kernelContext =
             hybrid_error: hybridError,
           },
         },
-        usage: { mode, top_k, latency_ms: Date.now() - startedAt, debugPasses },
+        usage: {
+          mode,
+          top_k,
+          latency_ms: Date.now() - startedAt,
+          kernels_count: kernelHits.length,
+          debugPasses,
+        },
+
         user_id: user.id,
       }).catch((e) => console.warn("log insert failed:", e));
 
@@ -1893,10 +1901,9 @@ const kernelContext =
       cov.ingest_needed?.length ? `ingest_needed (pré-calculé):\n- ${cov.ingest_needed.join("\n- ")}` : "ingest_needed (pré-calculé): (aucun)",
       "",
       kernelsWarning ? `KERNELS_WARNING: ${kernelsWarning}` : "",
-"",
-"Course kernels (guides pédagogiques internes; NON des sources de droit; NE PAS les citer):",
-kernelContext,
-"",
+      "Course kernels (guides pédagogiques internes; NON des sources de droit; NE PAS les citer):",
+      kernelContext,
+      "",
 
       "Contexte (extraits):",
       context,
@@ -1913,6 +1920,8 @@ kernelContext,
       "- Réponse graduée: si partiel, partial=true + missing_coverage[] + ingest_needed[].",
       "- Ne mentionne aucun article/arrêt/lien/test précis hors allowlist.",
       "- No-block: si un fait manque, applique l’hypothèse commune et mentionne-la (pas de question bloquante).",
+      kernelHits.length ? "- Priorité: si des course kernels sont fournis, utilise-les comme structure (plan/étapes/pièges) et adapte aux faits." : "",
+
       "",
       "INSTRUCTIONS DE SORTIE (JSON strict, uniquement):",
       `{
@@ -1993,7 +2002,15 @@ RÈGLES:
             hybrid_error: hybridError,
           },
         },
-        usage: { mode, top_k, latency_ms: Date.now() - startedAt, openai_usage: completion.usage ?? null, debugPasses },
+        usage: {
+            mode,
+            top_k,
+            latency_ms: Date.now() - startedAt,
+            kernels_count: kernelHits.length,
+            openai_usage: completion.usage ?? null,
+            debugPasses,
+          },
+
         user_id: user.id,
       }).catch((e) => console.warn("log insert failed:", e));
 
@@ -2143,9 +2160,11 @@ RÈGLES:
         mode,
         top_k,
         latency_ms: Date.now() - startedAt,
+        kernels_count: kernelHits.length,
         openai_usage: completion.usage ?? null,
         debugPasses,
       },
+
       user_id: user.id,
     }).catch((e) => console.warn("log insert failed:", e));
 
@@ -2165,6 +2184,7 @@ RÈGLES:
         article_confidence,
         missing_coverage: parsed.missing_coverage ?? [],
         hybrid_error: hybridError,
+        kernels_count: kernelHits.length,
       },
     });
   } catch (e: any) {
