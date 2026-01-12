@@ -50,9 +50,15 @@ type ChatRequest = {
   top_k?: number | null;
   mode?: string | null;
 
+  // Phase 4D (input contract)
+  course_slug?: string | null;
+  user_goal?: string | null;
+  institution_name?: string | null;
+
   question?: string;
   messages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
 };
+
 
 // ------------------------------
 // Env
@@ -1432,10 +1438,58 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+const course_slug =
+  typeof body.course_slug === "string" && body.course_slug.trim() ? body.course_slug.trim() : null;
+
+const user_goal =
+  typeof body.user_goal === "string" && body.user_goal.trim() ? body.user_goal.trim() : null;
+
+const institution_name =
+  typeof body.institution_name === "string" && body.institution_name.trim()
+    ? body.institution_name.trim()
+    : null;
+
+const risk_flags: Record<string, any> = {};
+if (!course_slug) risk_flags.missing_course_slug = true;
+if (!user_goal) risk_flags.missing_user_goal = true;
 
     const profile = body.profile ?? null;
     const top_k = clamp(body.top_k ?? 7, 5, 8);
     const mode = (body.mode ?? "prod").toLowerCase();
+if (!course_slug || !user_goal) {
+  const clarify =
+    "Pour que je réponde selon ton cours : quel est ton **course_slug** (ou le nom du cours) et ton **objectif** (examen / comprendre / cas-pratique) ?";
+
+  await supaPost("/rest/v1/logs", {
+    question: message,
+    profile_slug: profile ?? null,
+    // Phase 4D
+    course_slug,
+    user_goal,
+    institution_name,
+    risk_flags,
+    top_ids: [],
+    response: {
+      answer: clarify,
+      sources: [],
+      qa: {
+        refused_reason: "clarify_missing_course_or_goal",
+        missing_coverage: ["course_slug ou user_goal manquant"],
+      },
+    },
+    usage: { mode, top_k, latency_ms: Date.now() - startedAt, type: "clarify" },
+    user_id: user.id,
+  }).catch((e) => console.warn("log insert failed:", e));
+
+  return json({
+    answer: clarify,
+    sources: [],
+    usage: {
+      type: "clarify",
+      missing: { course_slug: !course_slug, user_goal: !user_goal },
+    },
+  });
+}
 
     // ------------------------------
     // Domain + Jurisdiction (NO-BLOCK)
@@ -1700,6 +1754,12 @@ export async function POST(req: Request) {
       await supaPost("/rest/v1/logs", {
         question: message,
         profile_slug: profile ?? null,
+        // Phase 4D
+        course_slug,
+        user_goal,
+        institution_name,
+        risk_flags,
+
         top_ids: [],
         response: {
           answer,
@@ -1850,6 +1910,12 @@ RÈGLES:
       await supaPost("/rest/v1/logs", {
         question: message,
         profile_slug: profile ?? null,
+        // Phase 4D
+        course_slug,
+        user_goal,
+        institution_name,
+        risk_flags,
+
         top_ids: finalRows.map((r) => r.id),
         response: {
           answer,
@@ -1987,6 +2053,11 @@ RÈGLES:
     await supaPost("/rest/v1/logs", {
       question: message,
       profile_slug: profile ?? null,
+      // Phase 4D
+      course_slug,
+      user_goal,
+      institution_name,
+      risk_flags,
       top_ids: finalRows.map((r) => r.id),
       response: {
         answer,
