@@ -296,10 +296,24 @@ function hasWorkSignals(q: string): boolean {
 
 // Hypothèse par défaut: si non mentionné => NON syndiqué
 const UNION_KEYWORDS = ["syndiqué", "syndique", "syndicat", "grief", "convention collective", "accréditation", "accreditation"];
+
 function hasUnionSignals(q: string): boolean {
   const s = q.toLowerCase();
+
+  // NÉGATIONS fréquentes : "pas de syndicat", "aucun syndicat", "non syndiqué", etc.
+  const negUnionPatterns = [
+    /\bpas\s+de\s+syndicat\b/,
+    /\baucun\s+syndicat\b/,
+    /\bsans\s+syndicat\b/,
+    /\bnon\s+syndiqu[ée]\b/,
+    /\bpas\s+syndiqu[ée]\b/,
+  ];
+  if (negUnionPatterns.some((re) => re.test(s))) return false;
+
+  // Sinon détection positive classique
   return containsAny(s, UNION_KEYWORDS);
 }
+
 
 // Secteurs fédéraux (travail) + employeurs/organismes fédéraux (admin)
 const FED_WORK_SECTOR_KEYWORDS = [
@@ -508,11 +522,18 @@ function detectJurisdictionExpected(
   }
 
   if (domain === "Fiscal") {
-    // fiscalité = 2 régimes; si signal clair, lock; sinon UNKNOWN
-    if (containsAny(s, ["revenu québec", "revenu quebec", "tvq"])) return { selected: "QC", reason: "fiscal_qc_signal", lock: true };
-    if (containsAny(s, ["arc", "cra", "agence du revenu du canada", "tps", "gst"])) return { selected: "CA-FED", reason: "fiscal_fed_signal", lock: true };
-    return { selected: "UNKNOWN", reason: "fiscal_mixed_default", lock: false };
-  }
+  const hasQc = containsAny(s, ["revenu québec", "revenu quebec", "tvq", "t-0.1"]);
+  const hasFed = containsAny(s, ["arc", "cra", "agence du revenu du canada", "tps", "gst", "hst"]);
+
+  // ✅ Mixte explicite (TPS+TVQ / QC+Fédéral) => UNKNOWN (pas de lock)
+  if (hasQc && hasFed) return { selected: "UNKNOWN", reason: "fiscal_mixed_signals", lock: false };
+
+  if (hasQc) return { selected: "QC", reason: "fiscal_qc_signal", lock: true };
+  if (hasFed) return { selected: "CA-FED", reason: "fiscal_fed_signal", lock: true };
+
+  return { selected: "UNKNOWN", reason: "fiscal_mixed_default", lock: false };
+}
+
 
   if (domain === "Sante") return { selected: "QC", reason: "health_default_qc_majority", lock: false };
   if (domain === "Civil") return { selected: "QC", reason: "civil_default_qc_majority", lock: false };
