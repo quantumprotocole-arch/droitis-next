@@ -2,7 +2,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -79,7 +78,6 @@ type DistinctionRow = {
   priority: number;
 };
 
-
 // ------------------------------
 // Env
 // ------------------------------
@@ -136,7 +134,6 @@ function containsAny(hay: string, needles: string[]) {
   }
   return false;
 }
-
 
 function makeExcerpt(text: string, maxLen = 900): string {
   const t = (text || "").replace(/\s+/g, " ").trim();
@@ -263,25 +260,39 @@ function hasHealthSignals(q: string): boolean {
 function hasWorkSignals(q: string): boolean {
   const s = q.toLowerCase();
 
-  // ⚠️ IMPORTANT: pas de "travail" ni "emploi" (trop génériques; "travailleur autonome" ≠ domaine Travail)
+  //⚠️ IMPORTANT: pas de "travail" ni "emploi" (trop génériques; "travailleur autonome" ≠ domaine Travail)
   // On garde des signaux de LITIGE/RELATION DE TRAVAIL.
   const workStrong = [
-    "congédi", "congedi",
-    "licenci", "mise à pied", "mise a pied",
-    "renvoi", "cessation d'emploi", "cessation d’emploi", "fin d'emploi", "fin d’emploi",
-    "harcèlement", "harcelement",
-    "disciplin", "suspension",
-    "grief", "syndic", "convention collective",
-    "préavis", "preavis",
-    "indemnité", "indemnite",
+    "congédi",
+    "congedi",
+    "licenci",
+    "mise à pied",
+    "mise a pied",
+    "renvoi",
+    "cessation d'emploi",
+    "cessation d’emploi",
+    "fin d'emploi",
+    "fin d’emploi",
+    "harcèlement",
+    "harcelement",
+    "disciplin",
+    "suspension",
+    "grief",
+    "syndic",
+    "convention collective",
+    "préavis",
+    "preavis",
+    "indemnité",
+    "indemnite",
     "normes du travail",
-    "employeur", "employé", "employe",
+    "employeur",
+    "employé",
+    "employe",
     "contrat de travail",
   ];
 
   return containsAny(s, workStrong);
 }
-
 
 // Hypothèse par défaut: si non mentionné => NON syndiqué
 const UNION_KEYWORDS = ["syndiqué", "syndique", "syndicat", "grief", "convention collective", "accréditation", "accreditation"];
@@ -460,7 +471,10 @@ type Gate = {
   };
 };
 
-function detectJurisdictionExpected(message: string, domain: Domain): { selected: Jurisdiction; reason: string; lock: boolean; pitfall_keyword?: string | null } {
+function detectJurisdictionExpected(
+  message: string,
+  domain: Domain
+): { selected: Jurisdiction; reason: string; lock: boolean; pitfall_keyword?: string | null } {
   // 1) signaux explicites (prioritaires, lock)
   if (hasQcLegalSignals(message)) return { selected: "QC", reason: "explicit_qc_signal", lock: true };
   if (hasFedLegalSignals(message)) return { selected: "CA-FED", reason: "explicit_fed_signal", lock: true };
@@ -535,11 +549,27 @@ function detectDomain(message: string): Domain {
 
   // 3) Fiscal (AVANT Travail)
   const fiscal = [
-    "revenu québec", "revenu quebec", "agence du revenu",
-    "cotisation", "objection", "appel fiscal",
-    "tps", "tvq", "gst", "hst",
-    "impôt", "impot", "taxe", "déduction", "deduction",
-    "déclar", "declar", "revenu", "revenus", "factur", "facturation"
+    "revenu québec",
+    "revenu quebec",
+    "agence du revenu",
+    "cotisation",
+    "objection",
+    "appel fiscal",
+    "tps",
+    "tvq",
+    "gst",
+    "hst",
+    "impôt",
+    "impot",
+    "taxe",
+    "déduction",
+    "deduction",
+    "déclar",
+    "declar",
+    "revenu",
+    "revenus",
+    "factur",
+    "facturation",
   ];
 
   // Bonus : "travailleur autonome" est très souvent une question FISCALE,
@@ -580,7 +610,6 @@ function domainByCourseSlug(course_slug: string | null): Domain | null {
   // extensible plus tard (sans casser)
   return null;
 }
-
 
 // ------------------------------
 // Keyword extraction + expansion
@@ -1075,7 +1104,10 @@ function buildAlwaysAnswerFallback(args: {
   const unionTxt = gate.assumptions.union_assumed ? "syndiqué (signal détecté)" : "NON syndiqué (hypothèse par défaut: aucun signal)";
   const jurTxt = gate.selected;
 
-  const missing = (args.missing_coverage ?? []).length ? (args.missing_coverage ?? []).map((x) => `- ${x}`).join("\n") : "- Aucune source pertinente (ou aucune source dans la juridiction applicable).";
+  const missing = (args.missing_coverage ?? []).length
+    ? (args.missing_coverage ?? []).map((x) => `- ${x}`).join("\n")
+    : "- Aucune source pertinente (ou aucune source dans la juridiction applicable).";
+
   const ingest = (args.ingest_needed ?? []).length
     ? (args.ingest_needed ?? []).map((x) => `- ${x}`).join("\n")
     : [
@@ -1201,6 +1233,7 @@ async function hybridSearchRPC(args: {
     return await callRpc<HybridHit>("search_legal_vectors_hybrid_v1", payload);
   }
 }
+
 async function fetchTopDistinctions(course_slug: string, limit = 8): Promise<DistinctionRow[]> {
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/concept_distinctions?select=id,course_slug,concept_a,concept_b,rule_of_thumb,pitfalls,when_it_matters,priority&course_slug=eq.${encodeURIComponent(
@@ -1308,7 +1341,6 @@ function buildAllowedCitationText(sources: Source[]): string {
   return Array.from(uniq).join(" | ");
 }
 
-
 function redactUnsupportedRefs(text: string, allowedCitationsLower: string): { text: string; redactions: string[] } {
   let out = text ?? "";
   const redactions: string[] = [];
@@ -1344,14 +1376,9 @@ function buildServerIlacFallback(args: {
 }): NonNullable<ModelJson["ilac"]> {
   const { message, domain, jurisdiction, gate } = args;
 
-  const unionTxt = gate.assumptions.union_assumed
-    ? "syndiqué (signal détecté)"
-    : "non syndiqué (hypothèse par défaut, aucun signal)";
+  const unionTxt = gate.assumptions.union_assumed ? "syndiqué (signal détecté)" : "non syndiqué (hypothèse par défaut, aucun signal)";
 
-  const assumptions =
-    domain === "Travail"
-      ? `Hypothèse travail: ${unionTxt}.`
-      : "Hypothèses: faits non précisés → hypothèses communes appliquées.";
+  const assumptions = domain === "Travail" ? `Hypothèse travail: ${unionTxt}.` : "Hypothèses: faits non précisés → hypothèses communes appliquées.";
 
   return {
     probleme: message,
@@ -1361,11 +1388,9 @@ function buildServerIlacFallback(args: {
     application:
       `${assumptions} ` +
       "Comme les extraits nécessaires au régime applicable ne sont pas présents (ou insuffisants), je ne peux pas appliquer une règle de fond sans risquer d’inventer ou d’importer un mauvais régime.",
-    conclusion:
-      `Réponse partielle. Pour compléter, il faut ingérer les textes du régime ${jurisdiction} pertinents (voir ingest_needed).`,
+    conclusion: `Réponse partielle. Pour compléter, il faut ingérer les textes du régime ${jurisdiction} pertinents (voir ingest_needed).`,
   };
 }
-
 
 // ------------------------------
 // Format answer
@@ -1459,15 +1484,15 @@ function bestFallbackSourceIds(args: { sources: Source[]; domain: Domain; jurisd
 
     let sc = 0;
     if (jurisdiction !== "UNKNOWN" && jur === jurisdiction) sc += 2;
-    if (domain === "Penal" && ((s.citation ?? "").toLowerCase().includes("procédure pénale") || (s.citation ?? "").toLowerCase().includes("procédure penale"))) sc += 1;
-    if (domain === "Travail" && ((s.citation ?? "").toLowerCase().includes("travail") || (s.citation ?? "").toLowerCase().includes("normes"))) sc += 1;
-    if (domain === "Fiscal" && ((s.citation ?? "").toLowerCase().includes("impôt") || (s.citation ?? "").toLowerCase().includes("impot") || (s.citation ?? "").toLowerCase().includes("tax"))) sc += 1;
+    if (domain === "Penal" && (((s.citation ?? "").toLowerCase().includes("procédure pénale")) || (s.citation ?? "").toLowerCase().includes("procédure penale"))) sc += 1;
+    if (domain === "Travail" && (((s.citation ?? "").toLowerCase().includes("travail")) || (s.citation ?? "").toLowerCase().includes("normes"))) sc += 1;
+    if (domain === "Fiscal" && (((s.citation ?? "").toLowerCase().includes("impôt")) || (s.citation ?? "").toLowerCase().includes("impot") || (s.citation ?? "").toLowerCase().includes("tax"))) sc += 1;
 
     // Prefer “art.” over random
     if (/^art\./i.test((s.citation ?? "").trim())) sc += 0.5;
 
     // Penal: prefer CPP / CSR rather than unrelated (like insolvency)
-    if (domain === "Penal" && ((s.citation ?? "").toLowerCase().includes("faillite") || (s.citation ?? "").toLowerCase().includes("insolv"))) sc -= 2;
+    if (domain === "Penal" && (((s.citation ?? "").toLowerCase().includes("faillite")) || (s.citation ?? "").toLowerCase().includes("insolv"))) sc -= 2;
 
     return sc;
   };
@@ -1497,7 +1522,10 @@ export async function POST(req: Request) {
 
     const body = (await req.json().catch(() => ({}))) as ChatRequest;
 
-    let message = (typeof body.message === "string" && body.message.trim()) || (typeof body.question === "string" && body.question.trim()) || "";
+    let message =
+      (typeof body.message === "string" && body.message.trim()) ||
+      (typeof body.question === "string" && body.question.trim()) ||
+      "";
 
     if (!message && Array.isArray(body.messages)) {
       for (let i = body.messages.length - 1; i >= 0; i--) {
@@ -1518,71 +1546,74 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-const course_slug =
-  typeof body.course_slug === "string" && body.course_slug.trim() ? body.course_slug.trim() : null;
 
-const user_goal =
-  typeof body.user_goal === "string" && body.user_goal.trim() ? body.user_goal.trim() : null;
+    const course_slug = typeof body.course_slug === "string" && body.course_slug.trim() ? body.course_slug.trim() : null;
 
-const institution_name =
-  typeof body.institution_name === "string" && body.institution_name.trim()
-    ? body.institution_name.trim()
-    : null;
+    const user_goal = typeof body.user_goal === "string" && body.user_goal.trim() ? body.user_goal.trim() : null;
 
-const risk_flags: Record<string, any> = {};
-if (!course_slug) risk_flags.missing_course_slug = true;
-if (!user_goal) risk_flags.missing_user_goal = true;
+    const institution_name = typeof body.institution_name === "string" && body.institution_name.trim() ? body.institution_name.trim() : null;
+
+    const risk_flags: Record<string, any> = {};
+    if (!course_slug) risk_flags.missing_course_slug = true;
+    if (!user_goal) risk_flags.missing_user_goal = true;
 
     const profile = body.profile ?? null;
     const top_k = clamp(body.top_k ?? 7, 5, 8);
     const mode = (body.mode ?? "prod").toLowerCase();
     const gmode = goalMode(user_goal);
 
-if (!course_slug || !user_goal) {
-  const clarify =
-    "Pour que je réponde selon ton cours : quel est ton **course_slug** (ou le nom du cours) et ton **objectif** (examen / comprendre / cas-pratique) ?";
+    if (!course_slug || !user_goal) {
+      const clarify = "Pour que je réponde selon ton cours : quel est ton **course_slug** (ou le nom du cours) et ton **objectif** (examen / comprendre / cas-pratique) ?";
 
-  await supaPost("/rest/v1/logs", {
-    question: message,
-    profile_slug: profile ?? null,
-    // Phase 4D
-    course_slug,
-    user_goal,
-    institution_name,
-    risk_flags,
-    top_ids: [],
-    response: {
-      answer: clarify,
-      sources: [],
-      qa: {
-        refused_reason: "clarify_missing_course_or_goal",
-        missing_coverage: ["course_slug ou user_goal manquant"],
-      },
-    },
-    usage: { mode, top_k, latency_ms: Date.now() - startedAt, type: "clarify", kernels_count: 0 },
-    user_id: user.id,
-  }).catch((e) => console.warn("log insert failed:", e));
+      await supaPost("/rest/v1/logs", {
+        question: message,
+        profile_slug: profile ?? null,
+        // Phase 4D
+        course_slug,
+        user_goal,
+        institution_name,
+        risk_flags,
+        top_ids: [],
+        response: {
+          answer: clarify,
+          sources: [],
+          qa: {
+            refused_reason: "clarify_missing_course_or_goal",
+            missing_coverage: ["course_slug ou user_goal manquant"],
+          },
+        },
+        usage: {
+          mode,
+          top_k,
+          latency_ms: Date.now() - startedAt,
+          type: "clarify",
+          goal_mode: gmode,
+          kernels_count: 0,
+          distinctions_count: 0,
+        },
+        user_id: user.id,
+      }).catch((e) => console.warn("log insert failed:", e));
 
-  return json({
-    answer: clarify,
-    sources: [],
-    usage: {
-      type: "clarify",
-      missing: { course_slug: !course_slug, user_goal: !user_goal },
-    },
-  });
-}
+      return json({
+        answer: clarify,
+        sources: [],
+        usage: {
+          type: "clarify",
+          goal_mode: gmode,
+          missing: { course_slug: !course_slug, user_goal: !user_goal },
+        },
+      });
+    }
 
     // ------------------------------
     // Domain + Jurisdiction (NO-BLOCK)
     // ------------------------------
-      let domain_detected = detectDomain(message);
-      const forced = domainByCourseSlug(course_slug);
-      if (forced && domain_detected === "Inconnu") domain_detected = forced;
+    let domain_detected = detectDomain(message);
+    const forced = domainByCourseSlug(course_slug);
+    if (forced && domain_detected === "Inconnu") domain_detected = forced;
 
-      const gate = jurisdictionGateNoBlock(message, domain_detected);
-      const jurisdiction_expected = gate.selected;
-
+    const gate = jurisdictionGateNoBlock(message, domain_detected);
+    const jurisdiction_expected = gate.selected;
 
     // ------------------------------
     // Embedding + hybrid retrieval (RPC ONLY — 1 call, no filter to allow mixed where needed)
@@ -1591,35 +1622,31 @@ if (!course_slug || !user_goal) {
     if (!queryEmbedding) return json({ error: "Échec embedding" }, 500);
 
     // ------------------------------
-// Course kernels retrieval (Phase 4D — internal guides, NOT sources)
-// ------------------------------
-let kernelHits: KernelHit[] = [];
-let kernelsWarning: string | null = null;
+    // Course kernels retrieval (Phase 4D — internal guides, NOT sources)
+    // ------------------------------
+    let kernelHits: KernelHit[] = [];
+    let kernelsWarning: string | null = null;
 
-const allowKernels = gmode === "exam" || gmode === "case";
+    const allowKernels = gmode === "exam" || gmode === "case";
 
-try {
-  if (allowKernels) {
-    kernelHits = await callRpc<KernelHit>("search_course_kernels", {
-      query_embedding: queryEmbedding,
-      p_course_slug: course_slug as string,
-      match_count: 6,
-    });
-  }
-} catch (e: any) {
-  kernelsWarning = e?.message ? String(e.message) : String(e);
-}
+    try {
+      if (allowKernels) {
+        kernelHits = await callRpc<KernelHit>("search_course_kernels", {
+          query_embedding: queryEmbedding,
+          p_course_slug: course_slug as string,
+          match_count: 6,
+        });
+      }
+    } catch (e: any) {
+      kernelsWarning = e?.message ? String(e.message) : String(e);
+    }
 
-
-const kernelContext =
-  kernelHits.length > 0
-    ? kernelHits
-        .map(
-          (k, i) =>
-            `KERNEL ${i + 1} (topic=${k.topic}; sim=${Number(k.similarity ?? 0).toFixed(3)}):\n${k.content}`
-        )
-        .join("\n---\n")
-    : "(aucun kernel)";
+    const kernelContext =
+      kernelHits.length > 0
+        ? kernelHits
+            .map((k, i) => `KERNEL ${i + 1} (topic=${k.topic}; sim=${Number(k.similarity ?? 0).toFixed(3)}):\n${k.content}`)
+            .join("\n---\n")
+        : "(aucun kernel)";
 
     const baseKeywords = extractKeywords(message, 10);
     const { keywords } = expandQuery(message, baseKeywords, jurisdiction_expected, gate.assumptions.union_assumed);
@@ -1642,24 +1669,37 @@ const kernelContext =
       console.warn("hybridSearchRPC failed:", hybridError);
       hybridHits = [];
     }
-    let distinctions: DistinctionRow[] = [];
-try {
-  distinctions = await fetchTopDistinctions(course_slug as string, 8);
-} catch (e: any) {
-  console.warn("distinctions fetch failed:", e?.message ?? e);
-}
-const distinctionsContext =
-  distinctions.length
-    ? distinctions
-        .map((d, i) => {
-          const pits = (d.pitfalls ?? []).slice(0, 4).map((x) => `- ${x}`).join("\n");
-          return `DISTINCTION ${i + 1}: ${d.concept_a} vs ${d.concept_b} (priority=${d.priority})\nRule: ${d.rule_of_thumb}\nPitfalls:\n${pits || "- (none)"}`;
-        })
-        .join("\n---\n")
-    : "(aucune distinction)";
-    const minPriority = gmode === "learn" ? 90 : 0;
-distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority);
 
+    // ------------------------------
+    // Distinctions (M5: importance map)
+    // ------------------------------
+    let distinctions: DistinctionRow[] = [];
+    try {
+      distinctions = await fetchTopDistinctions(course_slug as string, 8);
+    } catch (e: any) {
+      console.warn("distinctions fetch failed:", e?.message ?? e);
+    }
+
+    // ✅ Filter BEFORE building context (fix incoherence)
+    const minPriority = gmode === "learn" ? 90 : 0;
+    distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority);
+    distinctions = distinctions.slice(0, 6);
+
+    const distinctionsContext =
+      distinctions.length
+        ? distinctions
+            .map((d, i) => {
+              const pits = (d.pitfalls ?? []).slice(0, 4).map((x) => `- ${x}`).join("\n");
+              const when = (d.when_it_matters ?? []).slice(0, 3).map((x) => `- ${x}`).join("\n");
+              return `DISTINCTION ${i + 1}: ${d.concept_a} vs ${d.concept_b} (priority=${d.priority})
+Rule: ${d.rule_of_thumb}
+When it matters:
+${when || "- (none)"}
+Pitfalls:
+${pits || "- (none)"}`;
+            })
+            .join("\n---\n")
+        : "(aucune distinction)";
 
     // ------------------------------
     // Pass ordering prioritizes expected, but still explores
@@ -1687,7 +1727,8 @@ distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority);
       const sc = scoreHit({ row: h, expected: jurisdiction_expected, keywords, article, similarity: sim });
 
       const rpcScore = typeof h.rrf_score === "number" ? h.rrf_score : typeof h.score === "number" ? h.score : 0;
-      const ftsBonus = h.from_fts === true ? 0.08 : typeof h.fts_rank === "number" ? Math.min(0.08, Math.max(0, h.fts_rank) * 0.02) : 0;
+      const ftsBonus =
+        h.from_fts === true ? 0.08 : typeof h.fts_rank === "number" ? Math.min(0.08, Math.max(0, h.fts_rank) * 0.02) : 0;
 
       const composite = rpcScore * 0.9 + sc.hit_quality_score * 0.25 + (sim ?? 0) * 0.08 + ftsBonus;
       return { composite, overlap: sc.overlap };
@@ -1759,9 +1800,6 @@ distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority);
       rawRows.push(r);
     }
 
-    // Determine preliminary selected jurisdiction:
-    // - if lock => ALWAYS expected
-    // - fiscal: if we have both QC and CA-FED, set UNKNOWN (mixed)
     const rawSources: Source[] = rawRows.slice(0, Math.min(rawRows.length, 20)).map((r) => ({
       id: r.id,
       citation: r.citation,
@@ -1782,7 +1820,6 @@ distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority);
       else if (jurisdiction_selected === "UNKNOWN") jurisdiction_selected = "UNKNOWN";
     }
 
-    // Now apply strict scope filter BEFORE final top_k pick
     const scopedRows = rawRows.filter((r) =>
       allowRowByScope({
         row: r,
@@ -1793,9 +1830,6 @@ distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority);
       })
     );
 
-    // If lock and scope filtering leaves nothing, we MUST NOT “fallback” to wrong regime.
-    // Always-answer fallback will handle this safely.
-    // Build finalRows with coverage-aware needs:
     const finalRows: EnrichedRow[] = [];
     const picked = new Set<string>();
 
@@ -1894,7 +1928,6 @@ distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority);
         user_goal,
         institution_name,
         risk_flags,
-
         top_ids: [],
         response: {
           answer,
@@ -1918,11 +1951,12 @@ distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority);
           mode,
           top_k,
           latency_ms: Date.now() - startedAt,
+          type: "answer",
+          goal_mode: gmode,
           kernels_count: kernelHits.length,
-          debugPasses,
           distinctions_count: distinctions.length,
+          debugPasses,
         },
-
         user_id: user.id,
       }).catch((e) => console.warn("log insert failed:", e));
 
@@ -1931,6 +1965,7 @@ distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority);
         sources: [],
         usage: {
           type: "answer",
+          goal_mode: gmode,
           domain_detected,
           jurisdiction_expected,
           jurisdiction_selected,
@@ -1940,6 +1975,8 @@ distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority);
           coverage_ok: false,
           partial: true,
           hybrid_error: hybridError,
+          kernels_count: kernelHits.length,
+          distinctions_count: distinctions.length,
         },
       });
     }
@@ -1975,9 +2012,15 @@ distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority);
       `Juridiction attendue (heuristique): ${jurisdiction_expected}`,
       `Juridiction sélectionnée (système): ${jurisdiction_selected}`,
       `Juridiction verrouillée (lock): ${gate.lock}`,
+
+      kernelsWarning ? `KERNELS_WARNING: ${kernelsWarning}` : "",
+      "Course kernels (guides pédagogiques internes; NON des sources de droit; NE PAS les citer):",
+      kernelContext,
+      "",
+
       "Concept distinctions (guides internes; NON des sources; NE PAS citer):",
-distinctionsContext,
-"",
+      distinctionsContext,
+      "",
 
       gate.pitfall_keyword ? `Exception/piège détecté: ${gate.pitfall_keyword}` : "",
       `Hypothèse syndicat (si non mentionné => non syndiqué): union_assumed=${gate.assumptions.union_assumed}`,
@@ -1986,14 +2029,11 @@ distinctionsContext,
       cov.missing_coverage?.length ? `missing_coverage (pré-calculé):\n- ${cov.missing_coverage.join("\n- ")}` : "missing_coverage (pré-calculé): (aucun)",
       cov.ingest_needed?.length ? `ingest_needed (pré-calculé):\n- ${cov.ingest_needed.join("\n- ")}` : "ingest_needed (pré-calculé): (aucun)",
       "",
-      kernelsWarning ? `KERNELS_WARNING: ${kernelsWarning}` : "",
-      "Course kernels (guides pédagogiques internes; NON des sources de droit; NE PAS les citer):",
-      kernelContext,
-      "",
 
       "Contexte (extraits):",
       context,
       "",
+
       "Allowed citations (tu ne peux mentionner QUE celles-ci, mot pour mot):",
       allowed_citations.length ? allowed_citations.map((c) => `- ${c}`).join("\n") : "(vide)",
       "",
@@ -2007,10 +2047,10 @@ distinctionsContext,
       "- Ne mentionne aucun article/arrêt/lien/test précis hors allowlist.",
       "- No-block: si un fait manque, applique l’hypothèse commune et mentionne-la (pas de question bloquante).",
       kernelHits.length ? "- Priorité: si des course kernels sont fournis, utilise-les comme structure (plan/étapes/pièges) et adapte aux faits." : "",
-      kernelHits.length ?   "- OBLIGATION: commence l'Application par un mini 'Plan d'examen' en 3–6 puces, basé sur les course kernels fournis (reprendre leurs étapes/pièges), puis adapte aux faits."
-  : "",
-  distinctions.length ? "- Si une distinction pertinente est fournie, intègre explicitement 1–2 'pitfalls à éviter' dans l'Application." : "",
-
+      kernelHits.length
+        ? "- OBLIGATION: commence l'Application par un mini 'Plan d'examen' en 3–6 puces, basé sur les course kernels fournis (reprendre leurs étapes/pièges), puis adapte aux faits."
+        : "",
+      distinctions.length ? "- Si une distinction pertinente est fournie, intègre explicitement 1–2 'pitfalls à éviter' dans l'Application." : "",
       "",
       "INSTRUCTIONS DE SORTIE (JSON strict, uniquement):",
       `{
@@ -2072,7 +2112,6 @@ RÈGLES:
         user_goal,
         institution_name,
         risk_flags,
-
         top_ids: finalRows.map((r) => r.id),
         response: {
           answer,
@@ -2092,18 +2131,38 @@ RÈGLES:
           },
         },
         usage: {
-            mode,
-            top_k,
-            latency_ms: Date.now() - startedAt,
-            kernels_count: kernelHits.length,
-            openai_usage: completion.usage ?? null,
-            debugPasses,
-          },
-
+          mode,
+          top_k,
+          latency_ms: Date.now() - startedAt,
+          type: "answer",
+          goal_mode: gmode,
+          kernels_count: kernelHits.length,
+          distinctions_count: distinctions.length,
+          openai_usage: completion.usage ?? null,
+          debugPasses,
+        },
         user_id: user.id,
       }).catch((e) => console.warn("log insert failed:", e));
 
-      return json({ answer, sources: [], usage: { type: "answer", domain_detected, rag_quality, partial: true } });
+      return json({
+        answer,
+        sources: [],
+        usage: {
+          type: "answer",
+          goal_mode: gmode,
+          domain_detected,
+          jurisdiction_expected,
+          jurisdiction_selected,
+          jurisdiction_lock: gate.lock,
+          rag_quality,
+          relevance_ok,
+          coverage_ok,
+          partial: true,
+          hybrid_error: hybridError,
+          kernels_count: kernelHits.length,
+          distinctions_count: distinctions.length,
+        },
+      });
     }
 
     // ------------------------------
@@ -2193,9 +2252,7 @@ RÈGLES:
       parsed.partial = true;
       parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "Incohérence de régime détectée; correction serveur (pas d’importation d’un autre régime).";
       parsed.missing_coverage = Array.from(new Set([...(parsed.missing_coverage ?? []), "Incohérence: le texte mentionnait un régime juridique d’une autre juridiction."]));
-      parsed.ingest_needed = Array.from(
-        new Set([...(parsed.ingest_needed ?? []), "Ajouter au corpus les textes du régime applicable (dans la juridiction retenue) afin d’éviter tout recours au mauvais régime."])
-      );
+      parsed.ingest_needed = Array.from(new Set([...(parsed.ingest_needed ?? []), "Ajouter au corpus les textes du régime applicable (dans la juridiction retenue) afin d’éviter tout recours au mauvais régime."]));
       parsed.ilac = buildServerIlacFallback({
         message,
         domain: domain_detected,
@@ -2249,11 +2306,13 @@ RÈGLES:
         mode,
         top_k,
         latency_ms: Date.now() - startedAt,
+        type: "answer",
+        goal_mode: gmode,
         kernels_count: kernelHits.length,
-        openai_usage: completion.usage ?? null,
+        distinctions_count: distinctions.length,
         debugPasses,
+        openai_usage: completion.usage ?? null,
       },
-
       user_id: user.id,
     }).catch((e) => console.warn("log insert failed:", e));
 
@@ -2262,6 +2321,7 @@ RÈGLES:
       sources,
       usage: {
         type: parsed.type,
+        goal_mode: gmode,
         domain_detected,
         jurisdiction_expected,
         jurisdiction_selected,
