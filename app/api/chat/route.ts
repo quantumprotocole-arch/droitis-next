@@ -123,6 +123,14 @@ function normalizeJurisdiction(j: string | null | undefined): Jurisdiction | "OT
   return "OTHER";
 }
 
+function isStatementTimeout(errMsg: string) {
+  return (
+    errMsg.includes("57014") ||
+    errMsg.toLowerCase().includes("statement timeout") ||
+    errMsg.toLowerCase().includes("canceling statement")
+  );
+}
+
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
 }
@@ -313,7 +321,6 @@ function hasUnionSignals(q: string): boolean {
   // Sinon détection positive classique
   return containsAny(s, UNION_KEYWORDS);
 }
-
 
 // Secteurs fédéraux (travail) + employeurs/organismes fédéraux (admin)
 const FED_WORK_SECTOR_KEYWORDS = [
@@ -522,18 +529,17 @@ function detectJurisdictionExpected(
   }
 
   if (domain === "Fiscal") {
-  const hasQc = containsAny(s, ["revenu québec", "revenu quebec", "tvq", "t-0.1"]);
-  const hasFed = containsAny(s, ["arc", "cra", "agence du revenu du canada", "tps", "gst", "hst"]);
+    const hasQc = containsAny(s, ["revenu québec", "revenu quebec", "tvq", "t-0.1"]);
+    const hasFed = containsAny(s, ["arc", "cra", "agence du revenu du canada", "tps", "gst", "hst"]);
 
-  // ✅ Mixte explicite (TPS+TVQ / QC+Fédéral) => UNKNOWN (pas de lock)
-  if (hasQc && hasFed) return { selected: "UNKNOWN", reason: "fiscal_mixed_signals", lock: false };
+    // ✅ Mixte explicite (TPS+TVQ / QC+Fédéral) => UNKNOWN (pas de lock)
+    if (hasQc && hasFed) return { selected: "UNKNOWN", reason: "fiscal_mixed_signals", lock: false };
 
-  if (hasQc) return { selected: "QC", reason: "fiscal_qc_signal", lock: true };
-  if (hasFed) return { selected: "CA-FED", reason: "fiscal_fed_signal", lock: true };
+    if (hasQc) return { selected: "QC", reason: "fiscal_qc_signal", lock: true };
+    if (hasFed) return { selected: "CA-FED", reason: "fiscal_fed_signal", lock: true };
 
-  return { selected: "UNKNOWN", reason: "fiscal_mixed_default", lock: false };
-}
-
+    return { selected: "UNKNOWN", reason: "fiscal_mixed_default", lock: false };
+  }
 
   if (domain === "Sante") return { selected: "QC", reason: "health_default_qc_majority", lock: false };
   if (domain === "Civil") return { selected: "QC", reason: "civil_default_qc_majority", lock: false };
@@ -1255,6 +1261,63 @@ async function hybridSearchRPC(args: {
   }
 }
 
+/**
+ * ✅ NOUVEAU: wrapper anti-timeout.
+ * - 1er essai: large (pas de filtre)
+ * - si timeout: retry plus petit + filtre juridiction
+ */
+async function hybridSearchWithRetry(args: {
+  query_text: string;
+  query_embedding: number[];
+  domain: Domain;
+  gate: Gate;
+  jurisdiction_expected: Jurisdiction;
+  goal_mode: "exam" | "case" | "learn";
+}): Promise<{ hits: HybridHit[]; hybridError: string | null }> {
+  const { query_text, query_embedding, domain, gate, jurisdiction_expected, goal_mode } = args;
+
+  const basePool = goal_mode === "learn" ? 120 : 180;
+
+  const narrowedJur: string | null =
+    domain === "Fiscal"
+      ? null
+      : gate.lock
+      ? jurisdiction_expected === "UNKNOWN"
+        ? null
+        : jurisdiction_expected
+      : jurisdiction_expected !== "UNKNOWN"
+      ? jurisdiction_expected
+      : null;
+
+  const attempts: Array<{ match_count: number; filter_jurisdiction_norm: string | null }> = [
+    { match_count: basePool, filter_jurisdiction_norm: null },
+    { match_count: 90, filter_jurisdiction_norm: narrowedJur },
+    { match_count: 45, filter_jurisdiction_norm: narrowedJur },
+  ];
+
+  let lastErr: string | null = null;
+
+  for (let i = 0; i < attempts.length; i++) {
+    const a = attempts[i];
+    try {
+      const hits = await hybridSearchRPC({
+        query_text,
+        query_embedding,
+        match_count: a.match_count,
+        filter_jurisdiction_norm: a.filter_jurisdiction_norm,
+        filter_bucket: null,
+      });
+      return { hits, hybridError: null };
+    } catch (e: any) {
+      lastErr = e?.message ?? String(e);
+      // Si ce n'est pas un timeout, pas la peine de spam retry
+      if (!isStatementTimeout(lastErr)) break;
+    }
+  }
+
+  return { hits: [], hybridError: lastErr };
+}
+
 async function fetchTopDistinctions(course_slug: string, limit = 8): Promise<DistinctionRow[]> {
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/concept_distinctions?select=id,course_slug,concept_a,concept_b,rule_of_thumb,pitfalls,when_it_matters,priority&course_slug=eq.${encodeURIComponent(
@@ -1637,7 +1700,7 @@ export async function POST(req: Request) {
     const jurisdiction_expected = gate.selected;
 
     // ------------------------------
-    // Embedding + hybrid retrieval (RPC ONLY — 1 call, no filter to allow mixed where needed)
+    // Embedding + hybrid retrieval
     // ------------------------------
     const queryEmbedding = await createEmbedding(message);
     if (!queryEmbedding) return json({ error: "Échec embedding" }, 500);
@@ -1673,22 +1736,21 @@ export async function POST(req: Request) {
     const { keywords } = expandQuery(message, baseKeywords, jurisdiction_expected, gate.assumptions.union_assumed);
     const article = detectArticleMention(message);
 
-    const poolSize = 220;
+    // ✅ CHANGEMENT ICI: hybrid avec retry anti-timeout
     let hybridHits: HybridHit[] = [];
     let hybridError: string | null = null;
-
-    try {
-      hybridHits = await hybridSearchRPC({
+    {
+      const r = await hybridSearchWithRetry({
         query_text: message,
         query_embedding: queryEmbedding,
-        match_count: poolSize,
-        filter_jurisdiction_norm: null,
-        filter_bucket: null,
+        domain: domain_detected,
+        gate,
+        jurisdiction_expected,
+        goal_mode: gmode,
       });
-    } catch (e: any) {
-      hybridError = e?.message ?? String(e);
-      console.warn("hybridSearchRPC failed:", hybridError);
-      hybridHits = [];
+      hybridHits = r.hits;
+      hybridError = r.hybridError;
+      if (hybridError) console.warn("hybridSearchWithRetry failed:", hybridError);
     }
 
     // ------------------------------
