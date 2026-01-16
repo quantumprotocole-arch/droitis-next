@@ -1,5 +1,5 @@
 // src/lib/courses/courseCatalog.ts
-import { COURSE_CATALOG_UNIVERSAL, MAPPING_OBSERVATIONS, QUESTIONS_FOR_ME } from "./courseCatalogData";
+import { COURSE_CATALOG_UNIVERSAL, MAPPING_OBSERVATIONS, QUESTIONS_FOR_ME, type CourseCatalogUniversalEntry } from "./courseCatalogData";
 
 export type CourseCatalogEntry = {
   course_slug: string;
@@ -8,15 +8,15 @@ export type CourseCatalogEntry = {
   one_liner: string;
   core_topics: string[];
   exam_focus: string[];
-  institution_specific: boolean;
-  institution_notes?: string;
+  accessibility: "all" | "institution_only";
+  institution_note?: string;
 };
 
 export type CourseResolveResult =
   | { ok: true; course_slug: string; match: "slug" | "alias" | "fuzzy"; matched_on: string }
-  | { ok: false; course_slug: null; match: null; matched_on: null; suggestions: CourseCatalogEntry[] };
+  | { ok: false; course_slug: null; match: null; matched_on: null; suggestions: string[] };
 
-export const COURSE_CATALOG: readonly CourseCatalogEntry[] = COURSE_CATALOG_UNIVERSAL as unknown as CourseCatalogEntry[];
+const COURSE_CATALOG: readonly CourseCatalogEntry[] = COURSE_CATALOG_UNIVERSAL as readonly CourseCatalogUniversalEntry[] as unknown as readonly CourseCatalogEntry[];
 
 export const COURSE_SLUGS = COURSE_CATALOG.map((c) => c.course_slug);
 
@@ -38,35 +38,26 @@ export function normalizeCourseKey(input: string): string {
     .replace(/\s+/g, " ");
 }
 
-// ------------------------------
-// Indexes (slug + aliases)
-// ------------------------------
+// ----------------------
+// Indexes (slug + alias)
+// ----------------------
 const bySlug = new Map<string, CourseCatalogEntry>();
 const aliasToSlug = new Map<string, string>();
 
 for (const c of COURSE_CATALOG) {
   bySlug.set(c.course_slug, c);
 
-  // ✅ slug direct
-  aliasToSlug.set(normalizeCourseKey(c.course_slug), c.course_slug);
-
-  // ✅ display_name comme alias
-  aliasToSlug.set(normalizeCourseKey(c.display_name), c.course_slug);
-
-  // ✅ alias_names
   for (const a of c.alias_names ?? []) {
     const k = normalizeCourseKey(a);
     if (!k) continue;
-    // si collision: on garde le premier (stable)
+    // si conflit: on garde le 1er (stable)
     if (!aliasToSlug.has(k)) aliasToSlug.set(k, c.course_slug);
   }
 }
 
-export function getCourseBySlug(course_slug: string | null | undefined): CourseCatalogEntry | null {
-  if (!course_slug) return null;
-  return bySlug.get(course_slug) ?? null;
-}
-
+// ----------------------
+// Public API
+// ----------------------
 export function listCourses(): CourseCatalogEntry[] {
   return [...COURSE_CATALOG];
 }
@@ -96,51 +87,30 @@ export function resolveCourseSlug(input: string | null | undefined): CourseResol
     return { ok: true, course_slug: aliasHit, match: "alias", matched_on: raw };
   }
 
-  // 3) fuzzy (contains)
-  // On renvoie des suggestions triées par "proximité"
-  const scored: Array<{ c: CourseCatalogEntry; score: number }> = [];
+  // 3) fuzzy: contient (slug ou display_name ou alias)
+  const hay = k;
+  const scored: { slug: string; score: number }[] = [];
 
   for (const c of COURSE_CATALOG) {
-    const keys = [
-      normalizeCourseKey(c.display_name),
-      normalizeCourseKey(c.course_slug),
-      ...(c.alias_names ?? []).map(normalizeCourseKey),
-    ].filter(Boolean);
+    const slugK = normalizeCourseKey(c.course_slug);
+    const nameK = normalizeCourseKey(c.display_name);
+    let score = 0;
 
-    let best = 0;
-    for (const kk of keys) {
-      if (kk === k) best = Math.max(best, 100);
-      else if (kk.startsWith(k)) best = Math.max(best, 70);
-      else if (kk.includes(k)) best = Math.max(best, 50);
-      else {
-        // mini-score token overlap
-        const toks = new Set(k.split(" "));
-        const kkToks = new Set(kk.split(" "));
-        let overlap = 0;
-        toks.forEach((t) => {
-          if (t.length >= 3 && kkToks.has(t)) overlap++;
-        });
-        if (overlap >= 2) best = Math.max(best, 35);
-        else if (overlap === 1) best = Math.max(best, 20);
-      }
+    if (slugK.includes(hay)) score += 3;
+    if (nameK.includes(hay)) score += 2;
+
+    for (const a of c.alias_names ?? []) {
+      const ak = normalizeCourseKey(a);
+      if (ak.includes(hay)) score += 1;
     }
 
-    if (best > 0) scored.push({ c, score: best });
+    if (score > 0) scored.push({ slug: c.course_slug, score });
   }
 
   scored.sort((a, b) => b.score - a.score);
+  const top = scored.slice(0, 5).map((x) => x.slug);
 
-  if (scored.length) {
-    const top = scored.slice(0, 8).map((x) => x.c);
-    // si le meilleur score est vraiment bon, on “résout”
-    if (scored[0].score >= 70) {
-      return {
-        ok: true,
-        course_slug: scored[0].c.course_slug,
-        match: "fuzzy",
-        matched_on: raw,
-      };
-    }
+  if (top.length) {
     return {
       ok: false,
       course_slug: null,

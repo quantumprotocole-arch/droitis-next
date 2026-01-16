@@ -156,9 +156,31 @@ function goalMode(user_goal: string | null): "exam" | "case" | "learn" {
   return "learn";
 }
 
-// ------------------------------
-// Jurisdiction + domain signals (no-block, majority unless exception)
-// ------------------------------
+type InferredIntent = { goal_mode: "exam" | "case" | "learn"; wants_exam_tip: boolean };
+
+function inferIntent(args: { message: string; user_goal: string | null }): InferredIntent {
+  // Backward-compatible: if user_goal is provided by an old client, respect it.
+  const fromGoal = args.user_goal ? goalMode(args.user_goal) : null;
+  const t = (args.message ?? "").toLowerCase();
+
+  const has = (...keys: string[]) => keys.some((k) => t.includes(k));
+
+  const inferred: "exam" | "case" | "learn" = fromGoal
+    ? fromGoal
+    : has("cas pratique", "mise en situation", "hypothèse", "scenario", "scénario", "application", "ilac", "irac") || (/\bcas\b/.test(t) && !has("dans le cas où je", "au cas où"))
+    ? "case"
+    : has("examen", "final", "intra", "midterm", "quiz", "qcm", "mcq", "fiche", "résumé", "resume", "plan", "mémo", "memo", "révision", "revision")
+    ? "exam"
+    : "learn";
+
+  const wants_exam_tip =
+    inferred === "exam" ||
+    inferred === "case" ||
+    has("examen", "final", "intra", "midterm", "quiz", "qcm", "mcq", "fiche", "résumé", "resume", "plan", "mémo", "memo", "révision", "revision", "cas pratique", "mise en situation", "ilac", "irac");
+
+  return { goal_mode: inferred, wants_exam_tip };
+}
+
 function hasQcLegalSignals(q: string): boolean {
   const s = q.toLowerCase();
   const qcStrong = [
@@ -1479,7 +1501,7 @@ function buildServerIlacFallback(args: {
 // ------------------------------
 // Format answer
 // ------------------------------
-function formatAnswerFromModel(parsed: ModelJson, sources: Source[], serverWarning?: string): string {
+function formatAnswerFromModel(parsed: ModelJson, sources: Source[], serverWarning?: string, examTip?: string | null): string {
   if (parsed.type === "clarify") {
     return parsed.clarification_question ?? "Je réponds par défaut selon les hypothèses communes; indique des précisions si tu veux raffiner.";
   }
@@ -1536,9 +1558,52 @@ function formatAnswerFromModel(parsed: ModelJson, sources: Source[], serverWarni
     missing,
     ingest,
     `\n**Sources citées (allowlist uniquement)**\n${citedLines || "- (aucune)"}\n`,
+    examTip ? `\n**Conseil examen**\n${examTip}\n` : "",
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function buildExamTip(args: {
+  message: string;
+  goal_mode: "exam" | "case" | "learn";
+  parsed: ModelJson;
+  sources: Source[];
+  distinctions: DistinctionRow[];
+}): string {
+  const bullets: string[] = [];
+
+  const usedIds = (args.parsed.source_ids_used ?? []).map((x) => String(x));
+  const usedSources = usedIds
+    .map((id) => args.sources.find((s) => String(s.id) === id))
+    .filter(Boolean) as Source[];
+
+  const citations = usedSources
+    .map((s) => (s.citation ?? "").trim())
+    .filter(Boolean);
+
+  const articleLike = citations.filter((c) => /^art\./i.test(c) || c.toLowerCase().includes("article"));
+  const picked = (articleLike.length ? articleLike : citations).slice(0, 2);
+
+  if (picked.length) {
+    bullets.push(`- **À citer / mobiliser** : ${picked.map((c) => `« ${c} »`).join(" ; ")}`);
+  }
+
+  const d = args.distinctions?.[0] ?? null;
+  if (d) {
+    const thumb = makeExcerpt(d.rule_of_thumb ?? "", 160);
+    bullets.push(`- **Distinction utile** : ${d.concept_a} vs ${d.concept_b} — ${thumb}`);
+
+    const pit = (d.pitfalls ?? []).filter(Boolean)[0];
+    if (pit) bullets.push(`- **Piège classique** : ${makeExcerpt(pit, 160)}`);
+  }
+
+  if (!bullets.length) {
+    if (args.goal_mode === "case") bullets.push("- **Méthode** : applique ILAC (problème → règle → application → conclusion) et justifie chaque qualification par un indice factuel.");
+    else bullets.push("- **Méthode** : fais une mini-fiche (définition + conditions + exceptions + 1 exemple) et garde 1 phrase de conclusion testable en examen.");
+  }
+
+  return bullets.slice(0, 3).join("\n");
 }
 
 // ------------------------------
@@ -1639,15 +1704,18 @@ export async function POST(req: Request) {
 
     const risk_flags: Record<string, any> = {};
     if (!course_slug) risk_flags.missing_course_slug = true;
-    if (!user_goal) risk_flags.missing_user_goal = true;
 
     const profile = body.profile ?? null;
     const top_k = clamp(body.top_k ?? 7, 5, 8);
     const mode = (body.mode ?? "prod").toLowerCase();
-    const gmode = goalMode(user_goal);
 
-    if (!course_slug || !user_goal) {
-      const clarify = "Pour que je réponde selon ton cours : quel est ton **course_slug** (ou le nom du cours) et ton **objectif** (examen / comprendre / cas-pratique) ?";
+    const intent = inferIntent({ message, user_goal });
+    const gmode = intent.goal_mode;
+    const wants_exam_tip = intent.wants_exam_tip;
+
+    if (!course_slug) {
+      const clarify =
+        "Pour que je réponde selon ton cours : quel est le **cours** (sélectionne-le dans la liste, ou indique le course_slug) ?";
 
       await supaPost("/rest/v1/logs", {
         question: message,
@@ -1662,8 +1730,8 @@ export async function POST(req: Request) {
           answer: clarify,
           sources: [],
           qa: {
-            refused_reason: "clarify_missing_course_or_goal",
-            missing_coverage: ["course_slug ou user_goal manquant"],
+            refused_reason: "clarify_missing_course",
+            missing_coverage: ["course_slug manquant"],
           },
         },
         usage: {
@@ -1674,6 +1742,8 @@ export async function POST(req: Request) {
           goal_mode: gmode,
           kernels_count: 0,
           distinctions_count: 0,
+          debugPasses: [],
+          openai_usage: null,
         },
         user_id: user.id,
       }).catch((e) => console.warn("log insert failed:", e));
@@ -1684,7 +1754,7 @@ export async function POST(req: Request) {
         usage: {
           type: "clarify",
           goal_mode: gmode,
-          missing: { course_slug: !course_slug, user_goal: !user_goal },
+          missing: { course_slug: !course_slug },
         },
       });
     }
@@ -2350,7 +2420,8 @@ RÈGLES:
       if (rag_quality <= 2) parsed.partial = parsed.partial ?? true;
     }
 
-    const answer = formatAnswerFromModel(parsed, sources, serverWarning);
+    const examTip = wants_exam_tip && parsed.type === "answer" ? buildExamTip({ message, goal_mode: gmode, parsed, sources, distinctions }) : null;
+    const answer = formatAnswerFromModel(parsed, sources, serverWarning, examTip);
 
     // ------------------------------
     // Logging QA

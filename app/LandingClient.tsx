@@ -1,7 +1,7 @@
 // app/LandingClient.tsx
 'use client';
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 type Source = {
   id?: string | number;
@@ -22,23 +22,71 @@ type ApiResponse =
       details?: string;
     };
 
+
+type CourseOption = {
+  course_slug: string;
+  course_title: string;
+  scope: "all" | "institution_specific";
+  institution_note: string | null;
+  tags: string[];
+  aliases: string[];
+};
+
+type CoursesApiResponse =
+  | { courses: CourseOption[] }
+  | { error: string; details?: string };
+
 export default function HomePage() {
-  const [message, setMessage] = useState('Explique l’art. 1457 C.c.Q.');
+  const [message, setMessage] = useState<string>('Explique l’art. 1457 C.c.Q.');
   const [profile, setProfile] = useState<string>('');
   const [topK, setTopK] = useState<number>(5);
   const [mode, setMode] = useState<string>('default');
 
-  const [loading, setLoading] = useState(false);
+  const [courseSlug, setCourseSlug] = useState<string>('');
+  const [courses, setCourses] = useState<CourseOption[]>([]);
+  const [coursesLoading, setCoursesLoading] = useState<boolean>(false);
+  const [coursesError, setCoursesError] = useState<string | null>(null);
+
+  const [loading, setLoading] = useState<boolean>(false);
   const [serverError, setServerError] = useState<string | null>(null);
 
   const [answer, setAnswer] = useState<string>('');
   const [sources, setSources] = useState<Source[]>([]);
   const [usage, setUsage] = useState<{ top_k?: number; rpcOk?: boolean } | undefined>(undefined);
 
-  const canSend = useMemo(() => message.trim().length > 0 && !loading, [message, loading]);
+  const canSend = useMemo(() => message.trim().length > 0 && courseSlug.trim().length > 0 && !loading, [message, courseSlug, loading]);
+
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setCoursesLoading(true);
+      setCoursesError(null);
+      try {
+        const res = await fetch('/api/courses', { method: 'GET' });
+        const data: CoursesApiResponse = await res.json();
+        if (!res.ok) {
+          const msg = 'error' in data && data.error ? data.error : `Erreur API (${res.status})`;
+          throw new Error(`${msg}${'details' in data && data.details ? `: ${data.details}` : ''}`);
+        }
+        if (alive) {
+          const list = 'courses' in data ? (data.courses ?? []) : [];
+          setCourses(list);
+        }
+      } catch (e: any) {
+        if (alive) setCoursesError(e?.message ?? 'Failed to load courses');
+      } finally {
+        if (alive) setCoursesLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const send = useCallback(async () => {
     if (!canSend) return;
+
     setLoading(true);
     setServerError(null);
     setAnswer('');
@@ -51,6 +99,7 @@ export default function HomePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
+          course_slug: courseSlug,
           profile: profile || null,
           top_k: Math.max(1, Math.min(Number(topK) || 5, 20)),
           mode,
@@ -60,34 +109,32 @@ export default function HomePage() {
       const data: ApiResponse = await res.json();
 
       if (!res.ok) {
-        const msg =
-          'error' in data && data.error
-            ? data.error
-            : `Erreur API (${res.status})`;
-        setServerError(`${msg}${'details' in data && data.details ? ` — ${data.details}` : ''}`);
+        const msg = 'error' in data && data.error ? data.error : `Erreur API (${res.status})`;
+        setServerError(`${msg}${'details' in data && data.details ? `: ${data.details}` : ''}`);
         return;
       }
 
       if ('answer' in data) {
-        setAnswer(data.answer || '');
-        setSources(Array.isArray(data.sources) ? data.sources : []);
+        setAnswer(data.answer);
+        setSources(data.sources || []);
         setUsage(data.usage);
-      } else {
-        setServerError('Réponse inattendue du serveur.');
       }
-    } catch (err: any) {
-      setServerError(err?.message ?? String(err));
+    } catch (e: any) {
+      setServerError(e?.message ?? 'Erreur réseau');
     } finally {
       setLoading(false);
     }
-  }, [canSend, message, profile, topK, mode]);
+  }, [canSend, courseSlug, message, mode, profile, topK]);
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-      e.preventDefault();
-      send();
-    }
-  };
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        void send();
+      }
+    },
+    [send]
+  );
 
   return (
     <main style={styles.main}>
@@ -96,6 +143,40 @@ export default function HomePage() {
         <p style={{ marginTop: 8, opacity: 0.8 }}>
           Next.js → /api/chat → Supabase (RAG) → OpenAI → JSON
         </p>
+
+        <div style={styles.formRow}>
+          <label htmlFor="courseSlug" style={styles.label}>
+            Cours (obligatoire)
+          </label>
+
+          {coursesError ? (
+            <div style={{ fontSize: 12, marginTop: 6, color: '#b00020' }}>
+              Impossible de charger la liste des cours: {coursesError}
+            </div>
+          ) : null}
+
+          <select
+            id="courseSlug"
+            value={courseSlug}
+            onChange={(e) => setCourseSlug(e.target.value)}
+            style={styles.input}
+            disabled={coursesLoading}
+          >
+            <option value="">{coursesLoading ? 'Chargement…' : 'Sélectionner un cours…'}</option>
+            {courses.map((c) => {
+              const note =
+                c.scope === 'institution_specific' && c.institution_note
+                  ? ` (uniquement ${c.institution_note})`
+                  : '';
+              return (
+                <option key={c.course_slug} value={c.course_slug}>
+                  {c.course_title}
+                  {note}
+                </option>
+              );
+            })}
+          </select>
+        </div>
 
         <div style={styles.formRow}>
           <label htmlFor="message" style={styles.label}>
@@ -156,15 +237,15 @@ export default function HomePage() {
               style={styles.input}
             >
               <option value="default">default</option>
-              <option value="concise">concise</option>
-              <option value="detailed">detailed</option>
+              <option value="prod">prod</option>
+              <option value="dev">dev</option>
             </select>
           </div>
         </div>
 
-        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
           <button
-            onClick={send}
+            onClick={() => void send()}
             disabled={!canSend}
             style={{
               ...styles.button,
@@ -180,156 +261,157 @@ export default function HomePage() {
               setAnswer('');
               setSources([]);
               setServerError(null);
+              setUsage(undefined);
             }}
-            style={{ ...styles.button, background: '#e5e7eb', color: '#111827' }}
+            style={styles.buttonAlt}
           >
-            Réinitialiser
+            Effacer
           </button>
         </div>
 
-        {serverError && (
+        {serverError ? (
           <div style={styles.errorBox}>
-            <strong>Erreur :</strong> {serverError}
+            <strong>Erreur</strong>
+            <div style={{ marginTop: 6 }}>{serverError}</div>
           </div>
-        )}
+        ) : null}
 
-        {answer && (
-          <section style={styles.result}>
-            <h2 style={{ marginTop: 0 }}>Réponse</h2>
-            <div style={styles.answer}>{answer}</div>
+        {answer ? (
+          <section style={{ marginTop: 18 }}>
+            <h2 style={styles.sectionTitle}>Réponse</h2>
+            <pre style={styles.answer}>{answer}</pre>
 
-            {Array.isArray(sources) && sources.length > 0 && (
-              <>
-                <h3>Sources</h3>
-                <ul style={{ paddingLeft: 18, marginTop: 8 }}>
+            <div style={{ marginTop: 10 }}>
+              <h3 style={styles.sectionTitle}>Sources</h3>
+              {sources.length ? (
+                <ul style={{ paddingLeft: 18, marginTop: 6 }}>
                   {sources.map((s, i) => (
-                    <li key={`${s.id ?? i}`} style={{ marginBottom: 4 }}>
-                      {s.title || s.citation || `Source ${i + 1}`}
-                      {s.jurisdiction ? ` — ${s.jurisdiction}` : ''}
+                    <li key={String(s.id ?? i)} style={{ marginBottom: 6 }}>
+                      <div style={{ fontWeight: 600 }}>{s.title || `Source ${s.id ?? i + 1}`}</div>
+                      <div style={{ opacity: 0.85 }}>{s.citation}</div>
                       {s.url ? (
-                        <>
-                          {' '}
-                          —{' '}
+                        <div style={{ fontSize: 12, opacity: 0.8 }}>
                           <a href={s.url} target="_blank" rel="noreferrer">
-                            lien
+                            {s.url}
                           </a>
-                        </>
+                        </div>
                       ) : null}
                     </li>
                   ))}
                 </ul>
-              </>
-            )}
+              ) : (
+                <div style={{ opacity: 0.75, marginTop: 6 }}>(aucune)</div>
+              )}
+            </div>
 
-            {usage && (
-              <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>
-                Debug: top_k={usage.top_k ?? '-'} | rpcOk={String(usage.rpcOk)}
-              </div>
-            )}
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
+              usage: {usage ? JSON.stringify(usage) : '(n/a)'}
+            </div>
           </section>
-        )}
+        ) : null}
       </div>
-
-      <footer style={styles.footer}>
-        <small>
-          Front = clé anonyme uniquement. La Service Role Key reste strictement côté serveur
-          (/api/chat).
-        </small>
-      </footer>
     </main>
   );
 }
 
 const styles: Record<string, React.CSSProperties> = {
   main: {
-    minHeight: '100dvh',
-    display: 'grid',
-    placeItems: 'center',
-    padding: 16,
-    background: '#0b1220',
-    color: 'white',
+    minHeight: '100vh',
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    padding: 24,
+    background: '#0b1020',
+    color: '#e8eaf6',
+    fontFamily:
+      '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
   },
   card: {
-    width: '100%',
-    maxWidth: 860,
-    background: 'white',
-    color: '#111827',
-    borderRadius: 12,
-    padding: 20,
-    boxShadow:
-      '0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05)',
+    width: 'min(100%, 960px)',
+    background: 'rgba(255,255,255,0.06)',
+    border: '1px solid rgba(255,255,255,0.12)',
+    borderRadius: 14,
+    padding: 18,
+    boxShadow: '0 20px 50px rgba(0,0,0,0.35)',
   },
   formRow: {
-    marginTop: 12,
     display: 'flex',
     flexDirection: 'column',
-    gap: 6,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: 600,
-  },
-  textarea: {
-    width: '100%',
-    resize: 'vertical',
-    padding: 10,
-    border: '1px solid #e5e7eb',
-    borderRadius: 8,
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    fontSize: 14,
-    lineHeight: 1.4,
+    gap: 8,
+    marginTop: 14,
   },
   grid: {
     display: 'grid',
+    gridTemplateColumns: '1fr 1fr 1fr',
     gap: 12,
-    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-    marginTop: 12,
+    marginTop: 14,
   },
   formCol: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 6,
+    gap: 8,
+  },
+  label: {
+    fontSize: 12,
+    opacity: 0.85,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
   },
   input: {
     width: '100%',
-    padding: 10,
-    border: '1px solid #e5e7eb',
-    borderRadius: 8,
-    fontSize: 14,
+    padding: '10px 12px',
+    borderRadius: 10,
+    border: '1px solid rgba(255,255,255,0.15)',
+    background: 'rgba(0,0,0,0.25)',
+    color: '#fff',
+    outline: 'none',
+  },
+  textarea: {
+    width: '100%',
+    padding: '10px 12px',
+    borderRadius: 12,
+    border: '1px solid rgba(255,255,255,0.15)',
+    background: 'rgba(0,0,0,0.25)',
+    color: '#fff',
+    outline: 'none',
+    resize: 'vertical',
   },
   button: {
     padding: '10px 14px',
-    borderRadius: 8,
-    background: '#111827',
-    color: 'white',
+    borderRadius: 10,
     border: 'none',
+    background: '#4f7cff',
+    color: '#fff',
+    fontWeight: 700,
+  },
+  buttonAlt: {
+    padding: '10px 14px',
+    borderRadius: 10,
+    border: '1px solid rgba(255,255,255,0.2)',
+    background: 'transparent',
+    color: '#fff',
     fontWeight: 600,
-  },
-  errorBox: {
-    marginTop: 16,
-    padding: 12,
-    borderRadius: 8,
-    background: '#fee2e2',
-    color: '#7f1d1d',
-    border: '1px solid #fecaca',
-  },
-  result: {
-    marginTop: 18,
-    paddingTop: 8,
-    borderTop: '1px solid #e5e7eb',
   },
   answer: {
     whiteSpace: 'pre-wrap',
-    fontSize: 15,
-    lineHeight: 1.5,
-    background: '#f9fafb',
-    border: '1px solid #e5e7eb',
-    borderRadius: 8,
+    background: 'rgba(0,0,0,0.25)',
+    border: '1px solid rgba(255,255,255,0.12)',
+    borderRadius: 12,
     padding: 12,
+    lineHeight: 1.45,
   },
-  footer: {
-    marginTop: 18,
-    opacity: 0.7,
-    textAlign: 'center',
+  sectionTitle: {
+    margin: 0,
+    fontSize: 14,
+    opacity: 0.9,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  errorBox: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 12,
+    border: '1px solid rgba(255,0,0,0.35)',
+    background: 'rgba(255,0,0,0.08)',
   },
 };
