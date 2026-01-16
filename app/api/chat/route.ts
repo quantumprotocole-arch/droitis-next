@@ -1295,8 +1295,10 @@ async function hybridSearchWithRetry(args: {
   gate: Gate;
   jurisdiction_expected: Jurisdiction;
   goal_mode: "exam" | "case" | "learn";
+  course_slug: string | null; // ✅ ajout
 }): Promise<{ hits: HybridHit[]; hybridError: string | null }> {
-  const { query_text, query_embedding, domain, gate, jurisdiction_expected, goal_mode } = args;
+  const { query_text, query_embedding, domain, gate, jurisdiction_expected, goal_mode, course_slug } = args;
+
 
   const basePool = goal_mode === "learn" ? 120 : 180;
 
@@ -1323,12 +1325,13 @@ async function hybridSearchWithRetry(args: {
     const a = attempts[i];
     try {
       const hits = await hybridSearchRPC({
-        query_text,
-        query_embedding,
-        match_count: a.match_count,
-        filter_jurisdiction_norm: a.filter_jurisdiction_norm,
-        filter_bucket: null,
-      });
+  query_text,
+  query_embedding,
+  match_count: a.match_count,
+  filter_jurisdiction_norm: a.filter_jurisdiction_norm,
+  filter_bucket: course_slug, // ✅ filtre cours
+});
+
       return { hits, hybridError: null };
     } catch (e: any) {
       lastErr = e?.message ?? String(e);
@@ -1811,13 +1814,15 @@ export async function POST(req: Request) {
     let hybridError: string | null = null;
     {
       const r = await hybridSearchWithRetry({
-        query_text: message,
-        query_embedding: queryEmbedding,
-        domain: domain_detected,
-        gate,
-        jurisdiction_expected,
-        goal_mode: gmode,
-      });
+  query_text: message,
+  query_embedding: queryEmbedding,
+  domain: domain_detected,
+  gate,
+  jurisdiction_expected,
+  goal_mode: gmode,
+  course_slug, // ✅ ajout
+});
+
       hybridHits = r.hits;
       hybridError = r.hybridError;
       if (hybridError) console.warn("hybridSearchWithRetry failed:", hybridError);
