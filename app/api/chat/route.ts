@@ -1324,13 +1324,15 @@ async function hybridSearchWithRetry(args: {
   for (let i = 0; i < attempts.length; i++) {
     const a = attempts[i];
     try {
-      const hits = await hybridSearchRPC({
-  query_text,
-  query_embedding,
-  match_count: a.match_count,
-  filter_jurisdiction_norm: a.filter_jurisdiction_norm,
-  filter_bucket: course_slug, // ✅ filtre cours
+     const hits = await hybridSearchRPC({
+       query_text,
+      query_embedding,
+      match_count: a.match_count,
+      filter_jurisdiction_norm: a.filter_jurisdiction_norm,
+      // bucket = juridiction (QC / CA-FED), pas course_slug
+      filter_bucket: a.filter_jurisdiction_norm ?? null, // ou null si tu veux bucketless
 });
+
 
       return { hits, hybridError: null };
     } catch (e: any) {
