@@ -1169,14 +1169,14 @@ function buildAlwaysAnswerFallback(args: {
     `${warn}` +
     `**Juridiction applicable (heuristique/exception) : ${jurTxt}**\n` +
     `**Domaine : ${domain}**\n\n` +
-    `⚠️ Réponse partielle : je ne peux pas appliquer un autre régime juridique “par défaut” si la juridiction est verrouillée par une exception (ex. secteur fédéral).\n\n` +
+    `Note : selon les détails, le régime applicable peut varier; voici une orientation prudente (sans figer un autre régime) : un autre régime juridique “par défaut” si la juridiction est verrouillée par une exception (ex. secteur fédéral).\n\n` +
     `**Hypothèses par défaut utilisées**\n- Travail : ${unionTxt}\n\n` +
     `**Problème**\n${message}\n\n` +
     `**Règle**\nInformation non disponible dans le corpus actuel (ou sources insuffisantes dans la juridiction applicable).\n\n` +
     `**Application**\nSans extraits du régime applicable, je ne peux pas conclure au fond sans inventer.\n\n` +
     `**Conclusion**\nImpossible de trancher au fond avec certitude à partir du corpus actuel.\n\n` +
-    `**Couverture manquante (missing_coverage)**\n${missing}\n\n` +
-    `**À ingérer pour compléter (ingest_needed)**\n${ingest}\n`
+    `**Couverture manquante (missing_coverage)**\n\n\n` +
+    `**À ingérer pour compléter (ingest_needed)**\n\n`
   );
 }
 
@@ -1259,6 +1259,91 @@ async function callRpc<T>(rpcName: string, body: any): Promise<T[]> {
     throw new Error(`RPC ${rpcName} failed: ${rpcRes.status} ${t}`);
   }
   return ((await rpcRes.json()) ?? []) as T[];
+}
+
+
+async function supaGet<T>(path: string): Promise<T> {
+  const url = `${SUPABASE_URL}${path}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json",
+    },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`Supabase GET ${path} failed: ${res.status} ${t}`);
+  }
+  return (await res.json()) as T;
+}
+
+function normCodeId(codeId: string | null | undefined): string {
+  return String(codeId ?? "").trim().toLowerCase();
+}
+
+async function getCourseCanonicalCodes(course_slug: string): Promise<string[]> {
+  // course_law_requirements contains the canonical_code_id (already mapped).
+  type Row = { canonical_code_id: string | null };
+  const rows = await supaGet<Row[]>(
+    `/rest/v1/course_law_requirements?course_slug=eq.${encodeURIComponent(course_slug)}&select=canonical_code_id`
+  );
+  return rows
+    .map((r) => r.canonical_code_id)
+    .filter((x): x is string => !!x && x.trim().length > 0);
+}
+
+async function expandAliases(canonicalCodes: string[]): Promise<Set<string>> {
+  if (!canonicalCodes.length) return new Set();
+  // code_aliases: canonical_code, aliases[]
+  type AliasRow = { canonical_code: string; aliases: string[] | null };
+  const inList = canonicalCodes.map((c) => `"${c.replace(/"/g, '\"')}"`).join(",");
+  let rows: AliasRow[] = [];
+  try {
+    rows = await supaGet<AliasRow[]>(
+      `/rest/v1/code_aliases?canonical_code=in.(${encodeURIComponent(inList)})&select=canonical_code,aliases`
+    );
+  } catch {
+    rows = [];
+  }
+  const s = new Set<string>();
+  for (const c of canonicalCodes) s.add(normCodeId(c));
+  for (const r of rows) {
+    s.add(normCodeId(r.canonical_code));
+    for (const a of r.aliases ?? []) s.add(normCodeId(a));
+  }
+  return s;
+}
+
+async function getIngestNeededForCourse(course_slug: string): Promise<string[]> {
+  // We treat a required law as "to ingest" if law_registry says ingested_articles = 0 (or status=to_ingest).
+  type ReqRow = { law_key: string; canonical_code_id: string | null };
+  const reqRows = await supaGet<ReqRow[]>(
+    `/rest/v1/course_law_requirements?course_slug=eq.${encodeURIComponent(course_slug)}&select=law_key,canonical_code_id`
+  );
+  if (!reqRows.length) return [];
+  const lawKeys = reqRows.map((r) => r.law_key).filter(Boolean);
+  const inList = lawKeys.map((k) => `"${k.replace(/"/g, '\"')}"`).join(",");
+  type LR = { law_key: string; status: string | null; ingested_articles: number | null; canonical_code_id: string | null };
+  let lr: LR[] = [];
+  try {
+    lr = await supaGet<LR[]>(
+      `/rest/v1/law_registry?law_key=in.(${encodeURIComponent(inList)})&select=law_key,status,ingested_articles,canonical_code_id`
+    );
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const r of lr) {
+    const cnt = r.ingested_articles ?? 0;
+    const st = (r.status ?? "").toLowerCase();
+    if (cnt <= 0 || st === "to_ingest") {
+      out.push(r.canonical_code_id ?? r.law_key);
+    }
+  }
+  return Array.from(new Set(out)).slice(0, 24);
 }
 
 async function hybridSearchRPC(args: {
@@ -1380,7 +1465,7 @@ INTERDICTIONS
 RÈGLES DE JURIDICTION
 - Tu annonces la juridiction applicable avant d’énoncer la règle.
 - Si la juridiction est verrouillée (lock=true), tu NE DOIS PAS appliquer un autre régime (ex: CNESST/TAT si CA-FED).
-- Si les extraits disponibles ne couvrent pas la juridiction verrouillée, tu réponds PARTIELLEMENT et tu demandes d’ingérer le bon texte.
+- Si les extraits disponibles ne couvrent pas la juridiction verrouillée, tu réponds quand même (orientation prudente) et tu proposes d’ingérer le bon texte si nécessaire.
 
 HYPOTHÈSES PAR DÉFAUT (si non mentionné)
 1) Travail : travailleur NON syndiqué.
@@ -1390,8 +1475,8 @@ HYPOTHÈSES PAR DÉFAUT (si non mentionné)
 
 PHASE 4B — RÉPONSE GRADUÉE (IMPORTANT)
 - Le refus total doit être rare.
-- Si les sources sont partielles mais pertinentes : réponds quand même prudemment (partial=true),
-  et liste précisément missing_coverage[] + ingest_needed[].
+- Si les sources sont limitées mais pertinentes : réponds quand même prudemment,
+  et (si utile) liste précisément missing_coverage[] + ingest_needed[].
 - Ne “complète” jamais avec du plausible.
 `.trim();
 
@@ -1499,7 +1584,7 @@ function buildServerIlacFallback(args: {
     application:
       `${assumptions} ` +
       "Comme les extraits nécessaires au régime applicable ne sont pas présents (ou insuffisants), je ne peux pas appliquer une règle de fond sans risquer d’inventer ou d’importer un mauvais régime.",
-    conclusion: `Réponse partielle. Pour compléter, il faut ingérer les textes du régime ${jurisdiction} pertinents (voir ingest_needed).`,
+    conclusion: `Pour aller plus loin avec des citations précises, il faudra ingérer les textes du régime ${jurisdiction} pertinents (voir ingest_needed).`,
   };
 }
 
@@ -1512,12 +1597,10 @@ function formatAnswerFromModel(parsed: ModelJson, sources: Source[], serverWarni
   }
 
   if (parsed.type === "refuse") {
-    const ingest = (parsed.ingest_needed ?? []).map((x) => `- ${x}`).join("\n");
-    const missing = (parsed.missing_coverage ?? []).map((x) => `- ${x}`).join("\n");
     return [
       parsed.refusal_reason ?? "Je ne peux pas répondre de façon fiable avec le corpus actuel.",
       "",
-      missing ? `**Couverture manquante**\n${missing}\n` : "",
+      missing ? `**Couverture manquante**\n\n` : "",
       `**Information non disponible dans le corpus actuel. Pour répondre avec certitude, il faut ingérer :**\n${ingest || "- [préciser la loi / l’article / la juridiction à ingérer]."}`,
     ]
       .filter(Boolean)
@@ -1541,16 +1624,6 @@ function formatAnswerFromModel(parsed: ModelJson, sources: Source[], serverWarni
     .join("\n");
 
   const warn = serverWarning || parsed.warning ? `\n\n⚠️ ${serverWarning || parsed.warning}\n` : "";
-  const partial = parsed.partial ? `\n\n⚠️ Réponse partielle : certaines sous-questions ne sont pas couvertes par les extraits.\n` : "";
-
-  const missing = (parsed.missing_coverage ?? []).length
-    ? `\n\n**Couverture manquante (missing_coverage)**\n${(parsed.missing_coverage ?? []).map((x) => `- ${x}`).join("\n")}\n`
-    : "";
-
-  const ingest = (parsed.ingest_needed ?? []).length
-    ? `\n\n**À ingérer pour compléter (ingest_needed)**\n${(parsed.ingest_needed ?? []).map((x) => `- ${x}`).join("\n")}\n`
-    : "";
-
   return [
     `**Juridiction applicable (selon le système) : ${parsed.jurisdiction}**`,
     parsed.domain ? `**Domaine : ${parsed.domain}**` : "",
@@ -1715,54 +1788,25 @@ export async function POST(req: Request) {
     const mode = (body.mode ?? "prod").toLowerCase();
 
     const intent = inferIntent({ message, user_goal });
+
+    // ------------------------------
+    // Mapping-aware course constraints (filled later; NO-BLOCK)
+    // ------------------------------
+    let _courseCanonicalCodes: string[] = [];
+    let _allowedCodeIds: Set<string> | null = null;
+    let _ingestNeeded: string[] = [];
     const gmode = intent.goal_mode;
     const wants_exam_tip = intent.wants_exam_tip;
 
+    let _needsCourseSlug = false;
+    let _courseSlugQuestion: string | null = null;
     if (!course_slug) {
-      const clarify =
-        "Pour que je réponde selon ton cours : quel est le **cours** (sélectionne-le dans la liste, ou indique le course_slug) ?";
-
-      await supaPost("/rest/v1/logs", {
-        question: message,
-        profile_slug: profile ?? null,
-        // Phase 4D
-        course_slug,
-        user_goal,
-        institution_name,
-        risk_flags,
-        top_ids: [],
-        response: {
-          answer: clarify,
-          sources: [],
-          qa: {
-            refused_reason: "clarify_missing_course",
-            missing_coverage: ["course_slug manquant"],
-          },
-        },
-        usage: {
-          mode,
-          top_k,
-          latency_ms: Date.now() - startedAt,
-          type: "clarify",
-          goal_mode: gmode,
-          kernels_count: 0,
-          distinctions_count: 0,
-          debugPasses: [],
-          openai_usage: null,
-        },
-        user_id: user.id,
-      }).catch((e) => console.warn("log insert failed:", e));
-
-      return json({
-        answer: clarify,
-        sources: [],
-        usage: {
-          type: "clarify",
-          goal_mode: gmode,
-          missing: { course_slug: !course_slug },
-        },
-      });
+      _needsCourseSlug = true;
+      _courseSlugQuestion =
+        "Pour que je calibre exactement selon ton cours : quel est le **cours / programme / université** (ou le `course_slug`) ?";
+      // NO-BLOCK: on continue avec une réponse générale, puis on posera la question en fin de réponse.
     }
+
 
     // ------------------------------
     // Domain + Jurisdiction (NO-BLOCK)
@@ -1826,6 +1870,30 @@ export async function POST(req: Request) {
 });
 
       hybridHits = r.hits;
+
+      // ------------------------------
+      // Course law mapping: restrict sources to mapped/required codes when possible
+      // ------------------------------
+      _courseCanonicalCodes = [];
+      _allowedCodeIds = null;
+      _ingestNeeded = [];
+      try {
+        if (course_slug) {
+          _courseCanonicalCodes = await getCourseCanonicalCodes(course_slug as string);
+          _allowedCodeIds = await expandAliases(_courseCanonicalCodes);
+          _ingestNeeded = await getIngestNeededForCourse(course_slug as string);
+        }
+      } catch (e: any) {
+        console.warn("course mapping fetch failed:", e?.message ?? e);
+      }
+
+      // Filter hybrid hits to required code_ids (fallback to unfiltered if empty)
+      if (_allowedCodeIds && _allowedCodeIds.size) {
+        const filtered = (hybridHits ?? []).filter((h: any) => _allowedCodeIds!.has(normCodeId(h.code_id)));
+        if (filtered.length) {
+          hybridHits = filtered;
+        }
+      }
       hybridError = r.hybridError;
       if (hybridError) console.warn("hybridSearchWithRetry failed:", hybridError);
     }
@@ -2047,6 +2115,11 @@ ${pits || "- (none)"}`;
     });
 
     const cov = computeCoverage({ domain: domain_detected, message, finalRows, jurisdiction_selected, gate });
+
+    // Prefer ingest list derived from course requirements (mapping-aware)
+    if (typeof _ingestNeeded !== "undefined" && Array.isArray(_ingestNeeded) && _ingestNeeded.length) {
+      cov.ingest_needed = _ingestNeeded.slice(0, 24);
+    }
     const coverage_ok = cov.coverage_ok;
 
     const rag_quality = computeRagQuality({
@@ -2148,8 +2221,8 @@ ${pits || "- (none)"}`;
       rag_quality === 3
         ? undefined
         : rag_quality === 2
-        ? "Contexte partiel : je réponds prudemment selon les extraits disponibles."
-        : "Contexte faible : réponse limitée (il manque probablement des sources clés).";
+        ? "Contexte : je réponds prudemment selon les extraits disponibles."
+        : "Contexte : je réponds prudemment; certaines citations précises pourraient nécessiter plus de sources.";
 
     // ------------------------------
     // Build allowlists
@@ -2203,7 +2276,7 @@ ${pits || "- (none)"}`;
       "EXIGENCES:",
       "- Réponds en ILAC/IRAC très structurée.",
       "- Respecte STRICTEMENT la juridiction sélectionnée (surtout si lock=true).",
-      "- Réponse graduée: si partiel, partial=true + missing_coverage[] + ingest_needed[].",
+      "- Réponse graduée: si sources limitées, continue et remplis missing_coverage[] + ingest_needed[] (si utile).",
       "- Ne mentionne aucun article/arrêt/lien/test précis hors allowlist.",
       "- No-block: si un fait manque, applique l’hypothèse commune et mentionne-la (pas de question bloquante).",
       kernelHits.length ? "- Priorité: si des course kernels sont fournis, utilise-les comme structure (plan/étapes/pièges) et adapte aux faits." : "",
@@ -2341,7 +2414,7 @@ RÈGLES:
     if (parsed.type === "refuse") {
       parsed.type = "answer";
       parsed.partial = true;
-      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "No-block: refus converti en réponse partielle.";
+      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "No-block: refus converti en réponse utile.";
     }
 
     // Merge computed missing/ingest if model omitted
