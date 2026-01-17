@@ -9,7 +9,6 @@ export const dynamic = "force-dynamic";
 // Types
 // ------------------------------
 type Jurisdiction = "QC" | "CA-FED" | "OTHER" | "UNKNOWN";
-
 type Domain = "Civil" | "Travail" | "Sante" | "Penal" | "Fiscal" | "Admin" | "Autre" | "Inconnu";
 
 type EnrichedRow = {
@@ -27,12 +26,12 @@ type EnrichedRow = {
 // RPC hybrid result can include extra scoring fields.
 type HybridHit = EnrichedRow & {
   similarity?: number | null; // 0..1
-  distance?: number | null; // optional legacy
-  fts_rank?: number | null; // optional legacy
-  score?: number | null; // optional legacy
-  rrf_score?: number | null; // ✅ returned by your RPC
-  from_fts?: boolean | null; // ✅ returned by your RPC
-  bucket?: string | null; // optional legacy
+  distance?: number | null;
+  fts_rank?: number | null;
+  score?: number | null;
+  rrf_score?: number | null; // ✅ returned by RPC v2
+  from_fts?: boolean | null; // ✅ returned by RPC v2
+  bucket?: string | null;
 };
 
 type Source = {
@@ -159,15 +158,14 @@ function goalMode(user_goal: string | null): "exam" | "case" | "learn" {
 type InferredIntent = { goal_mode: "exam" | "case" | "learn"; wants_exam_tip: boolean };
 
 function inferIntent(args: { message: string; user_goal: string | null }): InferredIntent {
-  // Backward-compatible: if user_goal is provided by an old client, respect it.
   const fromGoal = args.user_goal ? goalMode(args.user_goal) : null;
   const t = (args.message ?? "").toLowerCase();
-
   const has = (...keys: string[]) => keys.some((k) => t.includes(k));
 
   const inferred: "exam" | "case" | "learn" = fromGoal
     ? fromGoal
-    : has("cas pratique", "mise en situation", "hypothèse", "scenario", "scénario", "application", "ilac", "irac") || (/\bcas\b/.test(t) && !has("dans le cas où je", "au cas où"))
+    : has("cas pratique", "mise en situation", "hypothèse", "scenario", "scénario", "application", "ilac", "irac") ||
+      (/\bcas\b/.test(t) && !has("dans le cas où je", "au cas où"))
     ? "case"
     : has("examen", "final", "intra", "midterm", "quiz", "qcm", "mcq", "fiche", "résumé", "resume", "plan", "mémo", "memo", "révision", "revision")
     ? "exam"
@@ -176,7 +174,27 @@ function inferIntent(args: { message: string; user_goal: string | null }): Infer
   const wants_exam_tip =
     inferred === "exam" ||
     inferred === "case" ||
-    has("examen", "final", "intra", "midterm", "quiz", "qcm", "mcq", "fiche", "résumé", "resume", "plan", "mémo", "memo", "révision", "revision", "cas pratique", "mise en situation", "ilac", "irac");
+    has(
+      "examen",
+      "final",
+      "intra",
+      "midterm",
+      "quiz",
+      "qcm",
+      "mcq",
+      "fiche",
+      "résumé",
+      "resume",
+      "plan",
+      "mémo",
+      "memo",
+      "révision",
+      "revision",
+      "cas pratique",
+      "mise en situation",
+      "ilac",
+      "irac"
+    );
 
   return { goal_mode: inferred, wants_exam_tip };
 }
@@ -289,9 +307,6 @@ function hasHealthSignals(q: string): boolean {
 
 function hasWorkSignals(q: string): boolean {
   const s = q.toLowerCase();
-
-  //⚠️ IMPORTANT: pas de "travail" ni "emploi" (trop génériques; "travailleur autonome" ≠ domaine Travail)
-  // On garde des signaux de LITIGE/RELATION DE TRAVAIL.
   const workStrong = [
     "congédi",
     "congedi",
@@ -320,17 +335,13 @@ function hasWorkSignals(q: string): boolean {
     "employe",
     "contrat de travail",
   ];
-
   return containsAny(s, workStrong);
 }
 
-// Hypothèse par défaut: si non mentionné => NON syndiqué
 const UNION_KEYWORDS = ["syndiqué", "syndique", "syndicat", "grief", "convention collective", "accréditation", "accreditation"];
 
 function hasUnionSignals(q: string): boolean {
   const s = q.toLowerCase();
-
-  // NÉGATIONS fréquentes : "pas de syndicat", "aucun syndicat", "non syndiqué", etc.
   const negUnionPatterns = [
     /\bpas\s+de\s+syndicat\b/,
     /\baucun\s+syndicat\b/,
@@ -339,21 +350,16 @@ function hasUnionSignals(q: string): boolean {
     /\bpas\s+syndiqu[ée]\b/,
   ];
   if (negUnionPatterns.some((re) => re.test(s))) return false;
-
-  // Sinon détection positive classique
   return containsAny(s, UNION_KEYWORDS);
 }
 
 // Secteurs fédéraux (travail) + employeurs/organismes fédéraux (admin)
 const FED_WORK_SECTOR_KEYWORDS = [
-  // banques
   "banque",
   "banques",
   "authorized foreign bank",
   "banque étrangère",
   "banque etrangere",
-
-  // télécom / radiodiffusion
   "télécom",
   "telecom",
   "télécommunications",
@@ -365,8 +371,6 @@ const FED_WORK_SECTOR_KEYWORDS = [
   "television",
   "câble",
   "cable",
-
-  // transport interprovincial / international
   "aviation",
   "aéroport",
   "aeroport",
@@ -393,16 +397,12 @@ const FED_WORK_SECTOR_KEYWORDS = [
   "trucking",
   "autobus",
   "bus",
-
-  // poste
   "poste canada",
   "canada post",
   "postal",
   "courrier",
   "messagerie",
   "courier",
-
-  // nucléaire/uranium (fédéral)
   "uranium",
   "nucléaire",
   "nucleaire",
@@ -494,10 +494,6 @@ function hasQcProvPenalSignals(q: string): boolean {
 }
 
 function defaultJurisdictionByDomain(domain: Domain): Jurisdiction {
-  // logique “majoritaire” au Québec :
-  // - civil/santé/admin => QC
-  // - pénal “substantif” => CA-FED (sauf signaux pénal provincial)
-  // - fiscal => mixte => UNKNOWN (laisser le retrieval récupérer QC + CA-FED)
   if (domain === "Penal") return "CA-FED";
   if (domain === "Fiscal") return "UNKNOWN";
   return "QC";
@@ -506,10 +502,10 @@ function defaultJurisdictionByDomain(domain: Domain): Jurisdiction {
 type Gate = {
   selected: Jurisdiction;
   reason: string;
-  lock: boolean; // ✅ si true, on ne change PAS la juridiction même si les sources dominantes sont ailleurs
+  lock: boolean;
   pitfall_keyword?: string | null;
   assumptions: {
-    union_assumed: boolean; // false si non mentionné
+    union_assumed: boolean;
     penal_provincial_assumed: boolean;
   };
 };
@@ -518,26 +514,20 @@ function detectJurisdictionExpected(
   message: string,
   domain: Domain
 ): { selected: Jurisdiction; reason: string; lock: boolean; pitfall_keyword?: string | null } {
-  // 1) signaux explicites (prioritaires, lock)
   if (hasQcLegalSignals(message)) return { selected: "QC", reason: "explicit_qc_signal", lock: true };
   if (hasFedLegalSignals(message)) return { selected: "CA-FED", reason: "explicit_fed_signal", lock: true };
 
-  // 2) OTHER géographique explicite (lock)
   const s = message.toLowerCase();
   const otherSignals = ["ontario", "alberta", "colombie-britannique", "british columbia", "france", "europe", "usa", "états-unis", "etats-unis"];
   if (containsAny(s, otherSignals)) return { selected: "OTHER", reason: "explicit_other_geo", lock: true };
 
-  // 3) par domaine + exceptions fréquentes
   if (domain === "Penal") {
-    // pénal provincial (CSR, tickets municipaux, etc.) => QC (lock)
     if (hasQcProvPenalSignals(message)) return { selected: "QC", reason: "penal_provincial_qc", lock: true };
-    // criminel “substantif” => CA-FED (lock)
     if (hasPenalSignals(message)) return { selected: "CA-FED", reason: "penal_substantive_fed", lock: true };
     return { selected: defaultJurisdictionByDomain(domain), reason: "penal_default_majority", lock: false };
   }
 
   if (domain === "Travail") {
-    // défaut QC, sauf secteurs fédéraux / employeur fédéral (lock)
     const fedSector = hasFedWorkSectorSignals(message);
     if (fedSector.matched) return { selected: "CA-FED", reason: "work_federal_sector_exception", lock: true, pitfall_keyword: fedSector.keyword ?? null };
     if (hasFedPublicEmployerSignals(message)) return { selected: "CA-FED", reason: "work_federal_public_employer", lock: true };
@@ -545,7 +535,6 @@ function detectJurisdictionExpected(
   }
 
   if (domain === "Admin") {
-    // défaut QC, sauf organisme/tribunal fédéral explicitement (lock)
     if (hasFedAdminAgencySignals(message)) return { selected: "CA-FED", reason: "admin_federal_agency_exception", lock: true };
     return { selected: "QC", reason: "admin_default_qc_majority", lock: false };
   }
@@ -553,20 +542,15 @@ function detectJurisdictionExpected(
   if (domain === "Fiscal") {
     const hasQc = containsAny(s, ["revenu québec", "revenu quebec", "tvq", "t-0.1"]);
     const hasFed = containsAny(s, ["arc", "cra", "agence du revenu du canada", "tps", "gst", "hst"]);
-
-    // ✅ Mixte explicite (TPS+TVQ / QC+Fédéral) => UNKNOWN (pas de lock)
     if (hasQc && hasFed) return { selected: "UNKNOWN", reason: "fiscal_mixed_signals", lock: false };
-
     if (hasQc) return { selected: "QC", reason: "fiscal_qc_signal", lock: true };
     if (hasFed) return { selected: "CA-FED", reason: "fiscal_fed_signal", lock: true };
-
     return { selected: "UNKNOWN", reason: "fiscal_mixed_default", lock: false };
   }
 
   if (domain === "Sante") return { selected: "QC", reason: "health_default_qc_majority", lock: false };
   if (domain === "Civil") return { selected: "QC", reason: "civil_default_qc_majority", lock: false };
 
-  // 4) défaut majoritaire
   return { selected: defaultJurisdictionByDomain(domain), reason: "domain_default_majority", lock: false };
 }
 
@@ -578,7 +562,7 @@ function jurisdictionGateNoBlock(message: string, domain: Domain): Gate {
     lock: base.lock,
     pitfall_keyword: base.pitfall_keyword ?? null,
     assumptions: {
-      union_assumed: hasUnionSignals(message), // si absent => false (non syndiqué)
+      union_assumed: hasUnionSignals(message),
       penal_provincial_assumed: domain === "Penal" ? hasQcProvPenalSignals(message) : false,
     },
   };
@@ -590,13 +574,9 @@ function jurisdictionGateNoBlock(message: string, domain: Domain): Gate {
 function detectDomain(message: string): Domain {
   const s = message.toLowerCase();
 
-  // 1) Pénal (inclut pénal provincial)
   if (hasPenalSignals(message) || hasQcProvPenalSignals(message)) return "Penal";
-
-  // 2) Santé
   if (hasHealthSignals(message)) return "Sante";
 
-  // 3) Fiscal (AVANT Travail)
   const fiscal = [
     "revenu québec",
     "revenu quebec",
@@ -621,25 +601,19 @@ function detectDomain(message: string): Domain {
     "facturation",
   ];
 
-  // Bonus : "travailleur autonome" est très souvent une question FISCALE,
-  // même si l’utilisateur n’a pas écrit "impôt/taxes" explicitement.
   if (
     s.includes("travailleur autonome") ||
     (s.includes("autonome") && containsAny(s, ["revenu", "revenus", "déclar", "declar", "taxe", "tps", "tvq", "impôt", "impot", "factur"]))
   ) {
     return "Fiscal";
   }
-
   if (containsAny(s, fiscal)) return "Fiscal";
 
-  // 4) Travail (litige/relations de travail)
   if (hasWorkSignals(message)) return "Travail";
 
-  // 5) Admin
   const admin = ["taq", "cai", "commission d'accès", "commission d’acces", "contrôle judiciaire", "controle judiciaire", "tribunal administratif", "permis", "zonage"];
   if (containsAny(s, admin)) return "Admin";
 
-  // 6) Civil
   const civil = ["responsabilité", "responsabilite", "faute", "préjudice", "prejudice", "dommage", "contrat", "obligation", "bail", "vice caché", "vice cache", "prescription"];
   if (containsAny(s, civil)) return "Civil";
 
@@ -650,13 +624,9 @@ function domainByCourseSlug(course_slug: string | null): Domain | null {
   const s = (course_slug ?? "").toLowerCase().trim();
   if (!s) return null;
 
-  // Obligations I (formation des contrats) => Civil
   if (s === "obligations-formation-des-contrats") return "Civil";
-
-  // Responsabilité civile => Civil
   if (s === "responsabilite-civile") return "Civil";
 
-  // extensible plus tard (sans casser)
   return null;
 }
 
@@ -757,7 +727,15 @@ function expandQuery(message: string, baseKeywords: string[], expected: Jurisdic
   const pinnedArticleNums: string[] = [];
   const has = (needle: string) => s.includes(needle);
 
-  if (has("responsabilité civile") || (has("responsabilite") && has("civile")) || has("faute") || has("préjudice") || has("prejudice") || has("dommage") || has("causal")) {
+  if (
+    has("responsabilité civile") ||
+    (has("responsabilite") && has("civile")) ||
+    has("faute") ||
+    has("préjudice") ||
+    has("prejudice") ||
+    has("dommage") ||
+    has("causal")
+  ) {
     add("faute");
     add("préjudice");
     add("prejudice");
@@ -767,10 +745,7 @@ function expandQuery(message: string, baseKeywords: string[], expected: Jurisdic
     add("lien");
     add("réparation");
     add("reparation");
-
-    if (expected === "QC" || expected === "UNKNOWN") {
-      pinnedArticleNums.push("1457", "1458", "1459");
-    }
+    if (expected === "QC" || expected === "UNKNOWN") pinnedArticleNums.push("1457", "1458", "1459");
   }
 
   if (has("contrat") || has("contractuel") || has("inexécution") || has("inexecution") || has("obligation")) {
@@ -794,7 +769,6 @@ function expandQuery(message: string, baseKeywords: string[], expected: Jurisdic
     add("preavis");
     add("recours");
 
-    // ✅ par défaut: non syndiqué (si rien n’est mentionné)
     if (unionAssumed) {
       add("syndicat");
       add("grief");
@@ -961,7 +935,7 @@ function hasEvidenceExclusionSignals(message: string): boolean {
 }
 
 // ------------------------------
-// Jurisdiction scope & filtering (CRUCIAL: prevent wrong-regime answers)
+// Jurisdiction scope & filtering
 // ------------------------------
 function allowRowByScope(args: {
   row: EnrichedRow;
@@ -975,27 +949,22 @@ function allowRowByScope(args: {
   const rowJur0 = normalizeJurisdiction(row.jurisdiction_norm);
   const rowJur: Jurisdiction = rowJur0 === "OTHER" ? "OTHER" : rowJur0;
 
-  // UNKNOWN => open (but we still try to prioritize expected in ranking)
   if (jurisdiction_selected === "UNKNOWN") {
-    // in practice, still exclude OTHER unless expected OTHER
     if (rowJur === "OTHER" && gate.selected !== "OTHER") return false;
     return true;
   }
 
-  // Fiscal => allow both QC and CA-FED (by nature). Exclude OTHER by default.
   if (domain === "Fiscal") {
     if (rowJur === "QC" || rowJur === "CA-FED") return true;
     return false;
   }
 
-  // Penal QC (tickets CSR/municipal): allow QC + (Charter sources) because it can apply to provincial prosecutions.
   if (domain === "Penal" && jurisdiction_selected === "QC") {
     if (rowJur === "QC") return true;
     if (rowJur === "CA-FED" && isCharterSource(row)) return true;
     return false;
   }
 
-  // Otherwise strict: only the selected jurisdiction.
   return rowJur === jurisdiction_selected;
 }
 
@@ -1015,7 +984,6 @@ function computeCoverage(args: {
   const ingest: string[] = [];
 
   if (finalRows.length === 0) {
-    // When locked, say explicitly we cannot safely import the wrong regime.
     const lockNote = gate.lock
       ? "Juridiction verrouillée par exception/signaux; aucune source de cette juridiction n’est disponible."
       : "Aucune source pertinente dans le corpus.";
@@ -1033,7 +1001,6 @@ function computeCoverage(args: {
     const hasCrCode = finalRows.some(isCriminalCodeSource);
     const hasEv = hasEvidenceExclusionSignals(message);
 
-    // If penal CA-FED => want Criminal Code + (Charter if relevant / or evidence exclusion signal)
     if (jurisdiction_selected === "CA-FED") {
       ok = hasCrCode && (hasCharter || hasEv);
       if (!hasCrCode) {
@@ -1045,8 +1012,6 @@ function computeCoverage(args: {
         ingest.push("Ajouter au corpus les extraits pertinents de la Charte canadienne (droits/réparations) liés à la question.");
       }
     } else {
-      // Penal QC (ticket/CSR): want Code de procédure pénale / CSR / règlement municipal (selon la question)
-      // (On ne peut pas deviner les articles exacts si non dans le corpus)
       ok = finalRows.length >= 1;
     }
   }
@@ -1057,8 +1022,8 @@ function computeCoverage(args: {
     if (work && jurisdiction_selected === "CA-FED") {
       ok = hasCLC;
       if (!hasCLC) {
-        missing.push("Régime fédéral du travail : extraits pertinents absents (ex. textes sur congédiement/recours/délais).");
-        ingest.push("Ajouter au corpus le texte fédéral applicable au travail (ex. Code canadien du travail : parties sur congédiement/recours, selon le cas).");
+        missing.push("Régime fédéral du travail : extraits pertinents absents (ex. congédiement/recours/délais).");
+        ingest.push("Ajouter au corpus le Code canadien du travail (parties pertinentes selon la question).");
       }
     }
   }
@@ -1113,7 +1078,6 @@ function computeRagQuality(args: {
   const n = sources.length;
   if (n === 0) return 0;
 
-  // For fiscal mixed, tolerate mixed selection.
   const fiscalMixed = domain === "Fiscal" && jurisdiction_selected === "UNKNOWN";
 
   let match = 0;
@@ -1148,35 +1112,36 @@ function buildAlwaysAnswerFallback(args: {
   ingest_needed?: string[];
 }): string {
   const { message, domain, gate, hybridError } = args;
-  const warn = hybridError ? `⚠️ HYBRID_RPC_WARNING: ${hybridError}\n\n` : "";
 
+  const warn = hybridError ? `⚠️ HYBRID_RPC_WARNING: ${hybridError}\n\n` : "";
   const unionTxt = gate.assumptions.union_assumed ? "syndiqué (signal détecté)" : "NON syndiqué (hypothèse par défaut: aucun signal)";
   const jurTxt = gate.selected;
 
-  const missing = (args.missing_coverage ?? []).length
-    ? (args.missing_coverage ?? []).map((x) => `- ${x}`).join("\n")
-    : "- Aucune source pertinente (ou aucune source dans la juridiction applicable).";
+  const missing =
+    (args.missing_coverage ?? []).length > 0
+      ? (args.missing_coverage ?? []).map((x) => `- ${x}`).join("\n")
+      : "- Aucune source pertinente (ou aucune source dans la juridiction applicable).";
 
-  const ingest = (args.ingest_needed ?? []).length
-    ? (args.ingest_needed ?? []).map((x) => `- ${x}`).join("\n")
-    : [
-        "- Texte officiel de la loi/règlement pertinent (QC ou CA selon la situation)",
-        "- Articles précis visés (si connus)",
-        "- Toute politique/contrat/convention collective si applicable (sinon hypothèse par défaut: non syndiqué)",
-      ].join("\n");
+  const ingest =
+    (args.ingest_needed ?? []).length > 0
+      ? (args.ingest_needed ?? []).map((x) => `- ${x}`).join("\n")
+      : [
+          "- Texte officiel de la loi/règlement pertinent (QC ou CA selon la situation)",
+          "- Articles précis visés (si connus)",
+          "- Toute politique/contrat/convention collective si applicable (sinon hypothèse par défaut: non syndiqué)",
+        ].join("\n");
 
   return (
     `${warn}` +
     `**Juridiction applicable (heuristique/exception) : ${jurTxt}**\n` +
     `**Domaine : ${domain}**\n\n` +
-    `Note : selon les détails, le régime applicable peut varier; voici une orientation prudente (sans figer un autre régime) : un autre régime juridique “par défaut” si la juridiction est verrouillée par une exception (ex. secteur fédéral).\n\n` +
     `**Hypothèses par défaut utilisées**\n- Travail : ${unionTxt}\n\n` +
     `**Problème**\n${message}\n\n` +
-    `**Règle**\nInformation non disponible dans le corpus actuel (ou sources insuffisantes dans la juridiction applicable).\n\n` +
+    `**Règle**\nJe ne peux pas citer une règle précise sans extraits applicables dans le corpus.\n\n` +
     `**Application**\nSans extraits du régime applicable, je ne peux pas conclure au fond sans inventer.\n\n` +
-    `**Conclusion**\nImpossible de trancher au fond avec certitude à partir du corpus actuel.\n\n` +
-    `**Couverture manquante (missing_coverage)**\n\n\n` +
-    `**À ingérer pour compléter (ingest_needed)**\n\n`
+    `**Conclusion**\nJe peux toutefois t’aider à structurer l’analyse; pour des citations précises, il faut compléter le corpus.\n\n` +
+    `**Couverture manquante**\n${missing}\n\n` +
+    `**À ingérer pour compléter**\n${ingest}\n`
   );
 }
 
@@ -1249,25 +1214,13 @@ async function supaPost(path: string, body: any) {
   return res;
 }
 
-// ------------------------------
-// Hybrid RPC search (FTS + vector) — RPC ONLY
-// ------------------------------
-async function callRpc<T>(rpcName: string, body: any): Promise<T[]> {
-  const rpcRes = await supaPost(`/rest/v1/rpc/${rpcName}`, body);
-  if (!rpcRes.ok) {
-    const t = await rpcRes.text().catch(() => "");
-    throw new Error(`RPC ${rpcName} failed: ${rpcRes.status} ${t}`);
-  }
-  return ((await rpcRes.json()) ?? []) as T[];
-}
-
-
 async function supaGet<T>(path: string): Promise<T> {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) throw new Error("SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant");
   const url = `${SUPABASE_URL}${path}`;
   const res = await fetch(url, {
     method: "GET",
     headers: {
-      apikey: SUPABASE_ANON_KEY,
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
       Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
       "Content-Type": "application/json",
     },
@@ -1280,70 +1233,16 @@ async function supaGet<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-function normCodeId(codeId: string | null | undefined): string {
-  return String(codeId ?? "").trim().toLowerCase();
-}
-
-async function getCourseCanonicalCodes(course_slug: string): Promise<string[]> {
-  // course_law_requirements contains the canonical_code_id (already mapped).
-  type Row = { canonical_code_id: string | null };
-  const rows = await supaGet<Row[]>(
-    `/rest/v1/course_law_requirements?course_slug=eq.${encodeURIComponent(course_slug)}&select=canonical_code_id`
-  );
-  return rows
-    .map((r) => r.canonical_code_id)
-    .filter((x): x is string => !!x && x.trim().length > 0);
-}
-
-async function expandAliases(canonicalCodes: string[]): Promise<Set<string>> {
-  if (!canonicalCodes.length) return new Set();
-  // code_aliases: canonical_code, aliases[]
-  type AliasRow = { canonical_code: string; aliases: string[] | null };
-  const inList = canonicalCodes.map((c) => `"${c.replace(/"/g, '\"')}"`).join(",");
-  let rows: AliasRow[] = [];
-  try {
-    rows = await supaGet<AliasRow[]>(
-      `/rest/v1/code_aliases?canonical_code=in.(${encodeURIComponent(inList)})&select=canonical_code,aliases`
-    );
-  } catch {
-    rows = [];
+// ------------------------------
+// Hybrid RPC search (FTS + vector) — RPC ONLY
+// ------------------------------
+async function callRpc<T>(rpcName: string, body: any): Promise<T[]> {
+  const rpcRes = await supaPost(`/rest/v1/rpc/${rpcName}`, body);
+  if (!rpcRes.ok) {
+    const t = await rpcRes.text().catch(() => "");
+    throw new Error(`RPC ${rpcName} failed: ${rpcRes.status} ${t}`);
   }
-  const s = new Set<string>();
-  for (const c of canonicalCodes) s.add(normCodeId(c));
-  for (const r of rows) {
-    s.add(normCodeId(r.canonical_code));
-    for (const a of r.aliases ?? []) s.add(normCodeId(a));
-  }
-  return s;
-}
-
-async function getIngestNeededForCourse(course_slug: string): Promise<string[]> {
-  // We treat a required law as "to ingest" if law_registry says ingested_articles = 0 (or status=to_ingest).
-  type ReqRow = { law_key: string; canonical_code_id: string | null };
-  const reqRows = await supaGet<ReqRow[]>(
-    `/rest/v1/course_law_requirements?course_slug=eq.${encodeURIComponent(course_slug)}&select=law_key,canonical_code_id`
-  );
-  if (!reqRows.length) return [];
-  const lawKeys = reqRows.map((r) => r.law_key).filter(Boolean);
-  const inList = lawKeys.map((k) => `"${k.replace(/"/g, '\"')}"`).join(",");
-  type LR = { law_key: string; status: string | null; ingested_articles: number | null; canonical_code_id: string | null };
-  let lr: LR[] = [];
-  try {
-    lr = await supaGet<LR[]>(
-      `/rest/v1/law_registry?law_key=in.(${encodeURIComponent(inList)})&select=law_key,status,ingested_articles,canonical_code_id`
-    );
-  } catch {
-    return [];
-  }
-  const out: string[] = [];
-  for (const r of lr) {
-    const cnt = r.ingested_articles ?? 0;
-    const st = (r.status ?? "").toLowerCase();
-    if (cnt <= 0 || st === "to_ingest") {
-      out.push(r.canonical_code_id ?? r.law_key);
-    }
-  }
-  return Array.from(new Set(out)).slice(0, 24);
+  return ((await rpcRes.json()) ?? []) as T[];
 }
 
 async function hybridSearchRPC(args: {
@@ -1369,9 +1268,7 @@ async function hybridSearchRPC(args: {
 }
 
 /**
- * ✅ NOUVEAU: wrapper anti-timeout.
- * - 1er essai: large (pas de filtre)
- * - si timeout: retry plus petit + filtre juridiction
+ * ✅ Wrapper anti-timeout.
  */
 async function hybridSearchWithRetry(args: {
   query_text: string;
@@ -1380,10 +1277,8 @@ async function hybridSearchWithRetry(args: {
   gate: Gate;
   jurisdiction_expected: Jurisdiction;
   goal_mode: "exam" | "case" | "learn";
-  course_slug: string | null; // ✅ ajout
 }): Promise<{ hits: HybridHit[]; hybridError: string | null }> {
-  const { query_text, query_embedding, domain, gate, jurisdiction_expected, goal_mode, course_slug } = args;
-
+  const { query_text, query_embedding, domain, gate, jurisdiction_expected, goal_mode } = args;
 
   const basePool = goal_mode === "learn" ? 120 : 180;
 
@@ -1409,20 +1304,16 @@ async function hybridSearchWithRetry(args: {
   for (let i = 0; i < attempts.length; i++) {
     const a = attempts[i];
     try {
-     const hits = await hybridSearchRPC({
-       query_text,
-      query_embedding,
-      match_count: a.match_count,
-      filter_jurisdiction_norm: a.filter_jurisdiction_norm,
-      // bucket = juridiction (QC / CA-FED), pas course_slug
-      filter_bucket: a.filter_jurisdiction_norm ?? null, // ou null si tu veux bucketless
-});
-
-
+      const hits = await hybridSearchRPC({
+        query_text,
+        query_embedding,
+        match_count: a.match_count,
+        filter_jurisdiction_norm: a.filter_jurisdiction_norm,
+        filter_bucket: a.filter_jurisdiction_norm ?? null,
+      });
       return { hits, hybridError: null };
     } catch (e: any) {
       lastErr = e?.message ?? String(e);
-      // Si ce n'est pas un timeout, pas la peine de spam retry
       if (!isStatementTimeout(lastErr)) break;
     }
   }
@@ -1430,15 +1321,88 @@ async function hybridSearchWithRetry(args: {
   return { hits: [], hybridError: lastErr };
 }
 
+// ------------------------------
+// Mapping helpers (course laws)
+// ------------------------------
+function normCodeId(codeId: string | null | undefined): string {
+  return String(codeId ?? "").trim().toLowerCase();
+}
+
+async function getCourseCanonicalCodes(course_slug: string): Promise<string[]> {
+  type Row = { canonical_code_id: string | null };
+  const rows = await supaGet<Row[]>(
+    `/rest/v1/course_law_requirements?course_slug=eq.${encodeURIComponent(course_slug)}&select=canonical_code_id`
+  );
+  return rows
+    .map((r) => r.canonical_code_id)
+    .filter((x): x is string => !!x && x.trim().length > 0);
+}
+
+async function expandAliases(canonicalCodes: string[]): Promise<Set<string>> {
+  if (!canonicalCodes.length) return new Set();
+  type AliasRow = { canonical_code: string; aliases: string[] | null };
+
+  // NB: Supabase REST in.(...) attend une liste de valeurs sans être double-encodée.
+  // On garde simple et tolérant.
+  const inList = canonicalCodes.map((c) => `"${c.replace(/"/g, '\\"')}"`).join(",");
+
+  let rows: AliasRow[] = [];
+  try {
+    rows = await supaGet<AliasRow[]>(
+      `/rest/v1/code_aliases?canonical_code=in.(${encodeURIComponent(inList)})&select=canonical_code,aliases`
+    );
+  } catch {
+    rows = [];
+  }
+
+  const s = new Set<string>();
+  for (const c of canonicalCodes) s.add(normCodeId(c));
+  for (const r of rows) {
+    s.add(normCodeId(r.canonical_code));
+    for (const a of r.aliases ?? []) s.add(normCodeId(a));
+  }
+  return s;
+}
+
+async function getIngestNeededForCourse(course_slug: string): Promise<string[]> {
+  type ReqRow = { law_key: string; canonical_code_id: string | null };
+  const reqRows = await supaGet<ReqRow[]>(
+    `/rest/v1/course_law_requirements?course_slug=eq.${encodeURIComponent(course_slug)}&select=law_key,canonical_code_id`
+  );
+  if (!reqRows.length) return [];
+
+  const lawKeys = reqRows.map((r) => r.law_key).filter(Boolean);
+  const inList = lawKeys.map((k) => `"${k.replace(/"/g, '\\"')}"`).join(",");
+
+  type LR = { law_key: string; status: string | null; ingested_articles: number | null; canonical_code_id: string | null };
+  let lr: LR[] = [];
+  try {
+    lr = await supaGet<LR[]>(
+      `/rest/v1/law_registry?law_key=in.(${encodeURIComponent(inList)})&select=law_key,status,ingested_articles,canonical_code_id`
+    );
+  } catch {
+    return [];
+  }
+
+  const out: string[] = [];
+  for (const r of lr) {
+    const cnt = r.ingested_articles ?? 0;
+    const st = (r.status ?? "").toLowerCase();
+    if (cnt <= 0 || st === "to_ingest") out.push(r.canonical_code_id ?? r.law_key);
+  }
+  return Array.from(new Set(out)).slice(0, 24);
+}
+
 async function fetchTopDistinctions(course_slug: string, limit = 8): Promise<DistinctionRow[]> {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) throw new Error("SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant");
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/concept_distinctions?select=id,course_slug,concept_a,concept_b,rule_of_thumb,pitfalls,when_it_matters,priority&course_slug=eq.${encodeURIComponent(
       course_slug
     )}&order=priority.desc&limit=${limit}`,
     {
       headers: {
-        apikey: SUPABASE_SERVICE_ROLE_KEY!,
-        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY!}`,
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
       },
     }
   );
@@ -1451,7 +1415,7 @@ async function fetchTopDistinctions(course_slug: string, limit = 8): Promise<Dis
 }
 
 // ------------------------------
-// Prompt + output checks — "verrouillé" + no-hallucination + no-block
+// Prompt + output checks
 // ------------------------------
 const SYSTEM_PROMPT = `
 Tu es Droitis, tuteur IA spécialisé en droit québécois ET canadien (QC/CA-FED) selon la juridiction applicable.
@@ -1464,19 +1428,17 @@ INTERDICTIONS
 
 RÈGLES DE JURIDICTION
 - Tu annonces la juridiction applicable avant d’énoncer la règle.
-- Si la juridiction est verrouillée (lock=true), tu NE DOIS PAS appliquer un autre régime (ex: CNESST/TAT si CA-FED).
+- Si la juridiction est verrouillée (lock=true), tu NE DOIS PAS appliquer un autre régime.
 - Si les extraits disponibles ne couvrent pas la juridiction verrouillée, tu réponds quand même (orientation prudente) et tu proposes d’ingérer le bon texte si nécessaire.
 
 HYPOTHÈSES PAR DÉFAUT (si non mentionné)
 1) Travail : travailleur NON syndiqué.
-2) Juridiction : appliquer la juridiction majoritaire du domaine, sauf signal explicite ou exception typique
-   (ex. banques/télécom/transport interprovincial => fédéral en droit du travail; criminel => fédéral; ticket CSR/municipal => QC).
+2) Juridiction : appliquer la juridiction majoritaire du domaine, sauf signal explicite ou exception typique.
 3) Tu indiques explicitement dans l’Application quand tu relies ton raisonnement à une hypothèse par défaut.
 
-PHASE 4B — RÉPONSE GRADUÉE (IMPORTANT)
+PHASE 4B — RÉPONSE GRADUÉE
 - Le refus total doit être rare.
-- Si les sources sont limitées mais pertinentes : réponds quand même prudemment,
-  et (si utile) liste précisément missing_coverage[] + ingest_needed[].
+- Si les sources sont limitées mais pertinentes : réponds quand même prudemment, et liste missing_coverage[] + ingest_needed[] si utile.
 - Ne “complète” jamais avec du plausible.
 `.trim();
 
@@ -1484,16 +1446,12 @@ type ModelJson = {
   type: "answer" | "clarify" | "refuse";
   jurisdiction: Jurisdiction;
   domain?: Domain;
-
   ilac?: { probleme: string; regle: string; application: string; conclusion: string };
-
   clarification_question?: string;
   refusal_reason?: string;
-
   partial?: boolean;
   missing_coverage?: string[];
   ingest_needed?: string[];
-
   source_ids_used?: Array<string | number>;
   warning?: string;
 };
@@ -1523,7 +1481,6 @@ function buildAllowedCitationText(sources: Source[]): string {
 
     add(c);
 
-    // Normalisation: si la citation contient un numéro d'article, ajouter variantes
     const m = c.match(/\b(?:art\.?|article)\s*([0-9]{1,5})\b/i);
     if (m?.[1]) {
       const n = m[1];
@@ -1533,7 +1490,6 @@ function buildAllowedCitationText(sources: Source[]): string {
     }
   }
 
-  // string "flat" pour includes()
   return Array.from(uniq).join(" | ");
 }
 
@@ -1561,7 +1517,7 @@ function redactUnsupportedRefs(text: string, allowedCitationsLower: string): { t
 }
 
 // ------------------------------
-// Minimal “server ILAC” (only when needed to prevent wrong-regime drift)
+// Minimal “server ILAC” fallback
 // ------------------------------
 function buildServerIlacFallback(args: {
   message: string;
@@ -1573,7 +1529,6 @@ function buildServerIlacFallback(args: {
   const { message, domain, jurisdiction, gate } = args;
 
   const unionTxt = gate.assumptions.union_assumed ? "syndiqué (signal détecté)" : "non syndiqué (hypothèse par défaut, aucun signal)";
-
   const assumptions = domain === "Travail" ? `Hypothèse travail: ${unionTxt}.` : "Hypothèses: faits non précisés → hypothèses communes appliquées.";
 
   return {
@@ -1589,56 +1544,89 @@ function buildServerIlacFallback(args: {
 }
 
 // ------------------------------
-// Format answer
+// Format answer (ModelJson actuel)
 // ------------------------------
-function formatAnswerFromModel(parsed: ModelJson, sources: Source[], serverWarning?: string, examTip?: string | null): string {
-  if (parsed.type === "clarify") {
-    return parsed.clarification_question ?? "Je réponds par défaut selon les hypothèses communes; indique des précisions si tu veux raffiner.";
-  }
+function renderAnswer(args: {
+  parsed: ModelJson;
+  sources: Source[];
+  distinctions: DistinctionRow[];
+  serverWarning?: string;
+  examTip?: string;
+}): string {
+  const { parsed, sources, serverWarning, examTip } = args;
+
+  const missingBlock =
+    Array.isArray(parsed.missing_coverage) && parsed.missing_coverage.length
+      ? `**Couverture manquante**\n\n${parsed.missing_coverage.map((x) => `- ${x}`).join("\n")}`
+      : "";
+
+  const ingestBlock =
+    Array.isArray(parsed.ingest_needed) && parsed.ingest_needed.length
+      ? `**À ingérer pour répondre avec certitude**\n${parsed.ingest_needed.map((x) => `- ${x}`).join("\n")}`
+      : "";
+
+  const partialBlock = ""; // volontaire: pas de “réponse partielle”
 
   if (parsed.type === "refuse") {
     return [
       parsed.refusal_reason ?? "Je ne peux pas répondre de façon fiable avec le corpus actuel.",
       "",
-      missing ? `**Couverture manquante**\n\n` : "",
-      `**Information non disponible dans le corpus actuel. Pour répondre avec certitude, il faut ingérer :**\n${ingest || "- [préciser la loi / l’article / la juridiction à ingérer]."}`,
+      missingBlock,
+      ingestBlock ||
+        "**Information non disponible dans le corpus actuel. Pour répondre avec certitude, il faut ingérer :**\n- (préciser la loi / l’article / la juridiction à ingérer).",
     ]
-      .filter(Boolean)
+      .filter((x): x is string => Boolean(x && x.trim()))
       .join("\n");
   }
 
-  const ilac = parsed.ilac!;
+  const ilac = parsed.ilac;
+  if (!ilac) {
+    return [
+      `**Juridiction applicable (selon le système) : ${parsed.jurisdiction ?? "Inconnue"}**`,
+      parsed.domain ? `**Domaine : ${parsed.domain}**` : "",
+      serverWarning || parsed.warning ? `\n\n⚠️ ${serverWarning || parsed.warning}\n` : "",
+      missingBlock,
+      ingestBlock,
+      "\n*(Structure ILAC indisponible dans la réponse modèle.)*",
+      examTip ? `\n**Conseil examen**\n${examTip}\n` : "",
+    ]
+      .filter((x): x is string => Boolean(x && x.trim()))
+      .join("\n");
+  }
+
   const usedIds = (parsed.source_ids_used ?? []).map((x) => String(x));
 
   const citedLines = usedIds
     .map((id) => {
       const s = sources.find((x) => String(x.id) === id);
       if (!s) return null;
+
       const jur = s.jur ?? "";
       const cit = s.citation ?? "(citation indisponible)";
       const url = s.url ?? "";
-      const tail = [id ? `id:${id}` : null, url ? url : null].filter(Boolean).join(" — ");
+      const tail = [id ? `id:${id}` : null, url ? url : null].filter((x): x is string => Boolean(x)).join(" — ");
       return `- ${cit}${jur ? ` — (${jur})` : ""}${tail ? " — " + tail : ""}`;
     })
-    .filter(Boolean)
+    .filter((x): x is string => Boolean(x))
     .join("\n");
 
   const warn = serverWarning || parsed.warning ? `\n\n⚠️ ${serverWarning || parsed.warning}\n` : "";
+
   return [
-    `**Juridiction applicable (selon le système) : ${parsed.jurisdiction}**`,
+    `**Juridiction applicable (selon le système) : ${parsed.jurisdiction ?? "Inconnue"}**`,
     parsed.domain ? `**Domaine : ${parsed.domain}**` : "",
     warn,
-    partial,
+    partialBlock,
     `**Problème**\n${ilac.probleme}`,
     `\n**Règle**\n${ilac.regle}`,
     `\n**Application**\n${ilac.application}`,
     `\n**Conclusion**\n${ilac.conclusion}`,
-    missing,
-    ingest,
+    missingBlock,
+    ingestBlock,
     `\n**Sources citées (allowlist uniquement)**\n${citedLines || "- (aucune)"}\n`,
     examTip ? `\n**Conseil examen**\n${examTip}\n` : "",
   ]
-    .filter(Boolean)
+    .filter((x): x is string => Boolean(x && x.trim()))
     .join("\n");
 }
 
@@ -1652,13 +1640,11 @@ function buildExamTip(args: {
   const bullets: string[] = [];
 
   const usedIds = (args.parsed.source_ids_used ?? []).map((x) => String(x));
-  const usedSources = usedIds
-    .map((id) => args.sources.find((s) => String(s.id) === id))
-    .filter(Boolean) as Source[];
+  const usedSources = usedIds.map((id) => args.sources.find((s) => String(s.id) === id)).filter((s): s is Source => Boolean(s));
 
   const citations = usedSources
     .map((s) => (s.citation ?? "").trim())
-    .filter(Boolean);
+    .filter((c): c is string => Boolean(c));
 
   const articleLike = citations.filter((c) => /^art\./i.test(c) || c.toLowerCase().includes("article"));
   const picked = (articleLike.length ? articleLike : citations).slice(0, 2);
@@ -1672,20 +1658,23 @@ function buildExamTip(args: {
     const thumb = makeExcerpt(d.rule_of_thumb ?? "", 160);
     bullets.push(`- **Distinction utile** : ${d.concept_a} vs ${d.concept_b} — ${thumb}`);
 
-    const pit = (d.pitfalls ?? []).filter(Boolean)[0];
+    const pit = (d.pitfalls ?? []).filter((p): p is string => Boolean(p))[0];
     if (pit) bullets.push(`- **Piège classique** : ${makeExcerpt(pit, 160)}`);
   }
 
   if (!bullets.length) {
-    if (args.goal_mode === "case") bullets.push("- **Méthode** : applique ILAC (problème → règle → application → conclusion) et justifie chaque qualification par un indice factuel.");
-    else bullets.push("- **Méthode** : fais une mini-fiche (définition + conditions + exceptions + 1 exemple) et garde 1 phrase de conclusion testable en examen.");
+    if (args.goal_mode === "case") {
+      bullets.push("- **Méthode** : applique ILAC (problème → règle → application → conclusion) et justifie chaque qualification par un indice factuel.");
+    } else {
+      bullets.push("- **Méthode** : fais une mini-fiche (définition + conditions + exceptions + 1 exemple) et garde 1 phrase de conclusion testable en examen.");
+    }
   }
 
   return bullets.slice(0, 3).join("\n");
 }
 
 // ------------------------------
-// “Wrong-regime” detector (server guardrail)
+// “Wrong-regime” detector
 // ------------------------------
 const QC_LABOUR_FORBIDDEN_IF_FED = ["cnesst", "tribunal administratif du travail", "tat", "normes du travail", "commission des normes", "rlrq", "loi sur les normes", "lnt"];
 const FED_LABOUR_FORBIDDEN_IF_QC = ["code canadien du travail", "canada labour code", "l.c. 1985", "l-2"];
@@ -1699,7 +1688,7 @@ function hasForbiddenRegimeLeak(args: { text: string; domain: Domain; jurisdicti
 }
 
 // ------------------------------
-// Source picking improvement (when model picks none)
+// Source picking improvement
 // ------------------------------
 function bestFallbackSourceIds(args: { sources: Source[]; domain: Domain; jurisdiction: Jurisdiction }): Array<string | number> {
   const { sources, domain, jurisdiction } = args;
@@ -1711,15 +1700,14 @@ function bestFallbackSourceIds(args: { sources: Source[]; domain: Domain; jurisd
 
     let sc = 0;
     if (jurisdiction !== "UNKNOWN" && jur === jurisdiction) sc += 2;
-    if (domain === "Penal" && (((s.citation ?? "").toLowerCase().includes("procédure pénale")) || (s.citation ?? "").toLowerCase().includes("procédure penale"))) sc += 1;
-    if (domain === "Travail" && (((s.citation ?? "").toLowerCase().includes("travail")) || (s.citation ?? "").toLowerCase().includes("normes"))) sc += 1;
-    if (domain === "Fiscal" && (((s.citation ?? "").toLowerCase().includes("impôt")) || (s.citation ?? "").toLowerCase().includes("impot") || (s.citation ?? "").toLowerCase().includes("tax"))) sc += 1;
 
-    // Prefer “art.” over random
+    const cit = (s.citation ?? "").toLowerCase();
+    if (domain === "Penal" && cit.includes("procédure pénale")) sc += 1;
+    if (domain === "Penal" && cit.includes("procedure penale")) sc += 1;
+    if (domain === "Fiscal" && (cit.includes("impôt") || cit.includes("impot") || cit.includes("tax"))) sc += 1;
+
     if (/^art\./i.test((s.citation ?? "").trim())) sc += 0.5;
-
-    // Penal: prefer CPP / CSR rather than unrelated (like insolvency)
-    if (domain === "Penal" && (((s.citation ?? "").toLowerCase().includes("faillite")) || (s.citation ?? "").toLowerCase().includes("insolv"))) sc -= 2;
+    if (domain === "Penal" && (cit.includes("faillite") || cit.includes("insolv"))) sc -= 2;
 
     return sc;
   };
@@ -1775,9 +1763,7 @@ export async function POST(req: Request) {
     }
 
     const course_slug = typeof body.course_slug === "string" && body.course_slug.trim() ? body.course_slug.trim() : null;
-
     const user_goal = typeof body.user_goal === "string" && body.user_goal.trim() ? body.user_goal.trim() : null;
-
     const institution_name = typeof body.institution_name === "string" && body.institution_name.trim() ? body.institution_name.trim() : null;
 
     const risk_flags: Record<string, any> = {};
@@ -1788,28 +1774,11 @@ export async function POST(req: Request) {
     const mode = (body.mode ?? "prod").toLowerCase();
 
     const intent = inferIntent({ message, user_goal });
-
-    // ------------------------------
-    // Mapping-aware course constraints (filled later; NO-BLOCK)
-    // ------------------------------
-    let _courseCanonicalCodes: string[] = [];
-    let _allowedCodeIds: Set<string> | null = null;
-    let _ingestNeeded: string[] = [];
     const gmode = intent.goal_mode;
     const wants_exam_tip = intent.wants_exam_tip;
 
-    let _needsCourseSlug = false;
-    let _courseSlugQuestion: string | null = null;
-    if (!course_slug) {
-      _needsCourseSlug = true;
-      _courseSlugQuestion =
-        "Pour que je calibre exactement selon ton cours : quel est le **cours / programme / université** (ou le `course_slug`) ?";
-      // NO-BLOCK: on continue avec une réponse générale, puis on posera la question en fin de réponse.
-    }
-
-
     // ------------------------------
-    // Domain + Jurisdiction (NO-BLOCK)
+    // Domain + Jurisdiction
     // ------------------------------
     let domain_detected = detectDomain(message);
     const forced = domainByCourseSlug(course_slug);
@@ -1825,18 +1794,18 @@ export async function POST(req: Request) {
     if (!queryEmbedding) return json({ error: "Échec embedding" }, 500);
 
     // ------------------------------
-    // Course kernels retrieval (Phase 4D — internal guides, NOT sources)
+    // Course kernels retrieval (internal guides, NOT sources)
     // ------------------------------
     let kernelHits: KernelHit[] = [];
     let kernelsWarning: string | null = null;
 
-    const allowKernels = gmode === "exam" || gmode === "case";
+    const allowKernels = (gmode === "exam" || gmode === "case") && !!course_slug;
 
     try {
-      if (allowKernels) {
+      if (allowKernels && course_slug) {
         kernelHits = await callRpc<KernelHit>("search_course_kernels", {
           query_embedding: queryEmbedding,
-          p_course_slug: course_slug as string,
+          p_course_slug: course_slug,
           match_count: 6,
         });
       }
@@ -1855,63 +1824,57 @@ export async function POST(req: Request) {
     const { keywords } = expandQuery(message, baseKeywords, jurisdiction_expected, gate.assumptions.union_assumed);
     const article = detectArticleMention(message);
 
-    // ✅ CHANGEMENT ICI: hybrid avec retry anti-timeout
+    // ------------------------------
+    // Hybrid search (retry)
+    // ------------------------------
     let hybridHits: HybridHit[] = [];
     let hybridError: string | null = null;
     {
       const r = await hybridSearchWithRetry({
-  query_text: message,
-  query_embedding: queryEmbedding,
-  domain: domain_detected,
-  gate,
-  jurisdiction_expected,
-  goal_mode: gmode,
-  course_slug, // ✅ ajout
-});
-
+        query_text: message,
+        query_embedding: queryEmbedding,
+        domain: domain_detected,
+        gate,
+        jurisdiction_expected,
+        goal_mode: gmode,
+      });
       hybridHits = r.hits;
-
-      // ------------------------------
-      // Course law mapping: restrict sources to mapped/required codes when possible
-      // ------------------------------
-      _courseCanonicalCodes = [];
-      _allowedCodeIds = null;
-      _ingestNeeded = [];
-      try {
-        if (course_slug) {
-          _courseCanonicalCodes = await getCourseCanonicalCodes(course_slug as string);
-          _allowedCodeIds = await expandAliases(_courseCanonicalCodes);
-          _ingestNeeded = await getIngestNeededForCourse(course_slug as string);
-        }
-      } catch (e: any) {
-        console.warn("course mapping fetch failed:", e?.message ?? e);
-      }
-
-      // Filter hybrid hits to required code_ids (fallback to unfiltered if empty)
-      if (_allowedCodeIds && _allowedCodeIds.size) {
-        const filtered = (hybridHits ?? []).filter((h: any) => _allowedCodeIds!.has(normCodeId(h.code_id)));
-        if (filtered.length) {
-          hybridHits = filtered;
-        }
-      }
       hybridError = r.hybridError;
       if (hybridError) console.warn("hybridSearchWithRetry failed:", hybridError);
     }
 
     // ------------------------------
-    // Distinctions (M5: importance map)
+    // Course law mapping: restrict sources to required codes (fallback if empty)
+    // ------------------------------
+    let _allowedCodeIds: Set<string> | null = null;
+    let _ingestNeeded: string[] = [];
+    try {
+      if (course_slug) {
+        const canon = await getCourseCanonicalCodes(course_slug);
+        _allowedCodeIds = await expandAliases(canon);
+        _ingestNeeded = await getIngestNeededForCourse(course_slug);
+      }
+    } catch (e: any) {
+      console.warn("course mapping fetch failed:", e?.message ?? e);
+    }
+
+    if (_allowedCodeIds && _allowedCodeIds.size) {
+      const filtered = (hybridHits ?? []).filter((h) => _allowedCodeIds!.has(normCodeId(h.code_id)));
+      if (filtered.length) hybridHits = filtered;
+    }
+
+    // ------------------------------
+    // Distinctions (internal)
     // ------------------------------
     let distinctions: DistinctionRow[] = [];
     try {
-      distinctions = await fetchTopDistinctions(course_slug as string, 8);
+      if (course_slug) distinctions = await fetchTopDistinctions(course_slug, 8);
     } catch (e: any) {
       console.warn("distinctions fetch failed:", e?.message ?? e);
     }
 
-    // ✅ Filter BEFORE building context (fix incoherence)
     const minPriority = gmode === "learn" ? 90 : 0;
-    distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority);
-    distinctions = distinctions.slice(0, 6);
+    distinctions = distinctions.filter((d) => (d.priority ?? 0) >= minPriority).slice(0, 6);
 
     const distinctionsContext =
       distinctions.length
@@ -1930,7 +1893,7 @@ ${pits || "- (none)"}`;
         : "(aucune distinction)";
 
     // ------------------------------
-    // Pass ordering prioritizes expected, but still explores
+    // Pass ordering
     // ------------------------------
     let PASS_ORDER: Jurisdiction[] = ["QC", "CA-FED", "OTHER"];
     if (jurisdiction_expected === "CA-FED") PASS_ORDER = ["CA-FED", "QC", "OTHER"];
@@ -2005,17 +1968,13 @@ ${pits || "- (none)"}`;
         hybridError,
       });
 
-      // optimisation: si lock et assez de bons hits dans la juridiction attendue, on stop (sauf fiscal/pénal)
       if (gate.lock && passJur === jurisdiction_expected && good >= minGoodHits && domain_detected !== "Fiscal" && domain_detected !== "Penal") break;
     }
 
-    // ------------------------------
-    // Global candidate sort
-    // ------------------------------
     const global = [...candidates].sort((a, b) => b.composite - a.composite);
 
     // ------------------------------
-    // First pass selection (raw) — then strict scope filter (prevents wrong-regime citations)
+    // First pass selection (raw)
     // ------------------------------
     const rawRows: EnrichedRow[] = [];
     const pickedRaw = new Set<string>();
@@ -2062,7 +2021,7 @@ ${pits || "- (none)"}`;
     const picked = new Set<string>();
 
     const need = {
-      charter: domain_detected === "Penal" && jurisdiction_selected !== "QC", // mostly for fed penal
+      charter: domain_detected === "Penal" && jurisdiction_selected !== "QC",
       crcode: domain_detected === "Penal" && jurisdiction_selected !== "QC",
       clc: domain_detected === "Travail" && jurisdiction_selected === "CA-FED",
     };
@@ -2074,7 +2033,6 @@ ${pits || "- (none)"}`;
       return false;
     };
 
-    // Take needed coverage first
     for (let i = 0; i < scopedRows.length && finalRows.length < top_k; i++) {
       const r = scopedRows[i];
       const k = dedupKey(r);
@@ -2089,7 +2047,6 @@ ${pits || "- (none)"}`;
       if (need.clc && isCanadaLabourCodeSource(r)) need.clc = false;
     }
 
-    // Fill remaining slots
     for (let i = 0; i < scopedRows.length && finalRows.length < top_k; i++) {
       const r = scopedRows[i];
       const k = dedupKey(r);
@@ -2116,10 +2073,10 @@ ${pits || "- (none)"}`;
 
     const cov = computeCoverage({ domain: domain_detected, message, finalRows, jurisdiction_selected, gate });
 
-    // Prefer ingest list derived from course requirements (mapping-aware)
-    if (typeof _ingestNeeded !== "undefined" && Array.isArray(_ingestNeeded) && _ingestNeeded.length) {
+    if (Array.isArray(_ingestNeeded) && _ingestNeeded.length) {
       cov.ingest_needed = _ingestNeeded.slice(0, 24);
     }
+
     const coverage_ok = cov.coverage_ok;
 
     const rag_quality = computeRagQuality({
@@ -2141,7 +2098,7 @@ ${pits || "- (none)"}`;
     const had_qc_source = sources.some((s) => normalizeJurisdiction(s.jur ?? "") === "QC");
 
     // ------------------------------
-    // No-source / low-relevance => ALWAYS ANSWER (no block)
+    // No-source / low-relevance => ALWAYS ANSWER
     // ------------------------------
     if (sources.length === 0 || !relevance_ok) {
       const answer = buildAlwaysAnswerFallback({
@@ -2156,7 +2113,6 @@ ${pits || "- (none)"}`;
       await supaPost("/rest/v1/logs", {
         question: message,
         profile_slug: profile ?? null,
-        // Phase 4D
         course_slug,
         user_goal,
         institution_name,
@@ -2245,28 +2201,23 @@ ${pits || "- (none)"}`;
       `Juridiction attendue (heuristique): ${jurisdiction_expected}`,
       `Juridiction sélectionnée (système): ${jurisdiction_selected}`,
       `Juridiction verrouillée (lock): ${gate.lock}`,
-
       kernelsWarning ? `KERNELS_WARNING: ${kernelsWarning}` : "",
       "Course kernels (guides pédagogiques internes; NON des sources de droit; NE PAS les citer):",
       kernelContext,
       "",
-
       "Concept distinctions (guides internes; NON des sources; NE PAS citer):",
       distinctionsContext,
       "",
-
       gate.pitfall_keyword ? `Exception/piège détecté: ${gate.pitfall_keyword}` : "",
-      `Hypothèse syndicat (si non mentionné => non syndiqué): union_assumed=${gate.assumptions.union_assumed}`,
+      `Hypothèse syndicat: union_assumed=${gate.assumptions.union_assumed}`,
       `Signaux QA: relevance_ok=${relevance_ok} ; coverage_ok=${coverage_ok} ; rag_quality=${rag_quality}`,
       hybridError ? `HYBRID_RPC_WARNING: ${hybridError}` : "",
       cov.missing_coverage?.length ? `missing_coverage (pré-calculé):\n- ${cov.missing_coverage.join("\n- ")}` : "missing_coverage (pré-calculé): (aucun)",
       cov.ingest_needed?.length ? `ingest_needed (pré-calculé):\n- ${cov.ingest_needed.join("\n- ")}` : "ingest_needed (pré-calculé): (aucun)",
       "",
-
       "Contexte (extraits):",
       context,
       "",
-
       "Allowed citations (tu ne peux mentionner QUE celles-ci, mot pour mot):",
       allowed_citations.length ? allowed_citations.map((c) => `- ${c}`).join("\n") : "(vide)",
       "",
@@ -2278,12 +2229,10 @@ ${pits || "- (none)"}`;
       "- Respecte STRICTEMENT la juridiction sélectionnée (surtout si lock=true).",
       "- Réponse graduée: si sources limitées, continue et remplis missing_coverage[] + ingest_needed[] (si utile).",
       "- Ne mentionne aucun article/arrêt/lien/test précis hors allowlist.",
-      "- No-block: si un fait manque, applique l’hypothèse commune et mentionne-la (pas de question bloquante).",
+      "- No-block: si un fait manque, applique l’hypothèse commune et mentionne-la.",
       kernelHits.length ? "- Priorité: si des course kernels sont fournis, utilise-les comme structure (plan/étapes/pièges) et adapte aux faits." : "",
-      kernelHits.length
-        ? "- OBLIGATION: commence l'Application par un mini 'Plan d'examen' en 3–6 puces, basé sur les course kernels fournis (reprendre leurs étapes/pièges), puis adapte aux faits."
-        : "",
-      distinctions.length ? "- Si une distinction pertinente est fournie, intègre explicitement 1–2 'pitfalls à éviter' dans l'Application." : "",
+      kernelHits.length ? "- OBLIGATION: commence l'Application par un mini 'Plan d'examen' en 3–6 puces (basé kernels)." : "",
+      distinctions.length ? "- Si une distinction pertinente est fournie, intègre explicitement 1–2 pitfalls dans l'Application." : "",
       "",
       "INSTRUCTIONS DE SORTIE (JSON strict, uniquement):",
       `{
@@ -2324,9 +2273,6 @@ RÈGLES:
       parsed = safeJsonParse<ModelJson>(completion.content) ?? parsed;
     }
 
-    // ------------------------------
-    // If parse fails => safe fallback (no wrong regime)
-    // ------------------------------
     if (!parsed) {
       const answer = buildAlwaysAnswerFallback({
         message,
@@ -2340,7 +2286,6 @@ RÈGLES:
       await supaPost("/rest/v1/logs", {
         question: message,
         profile_slug: profile ?? null,
-        // Phase 4D
         course_slug,
         user_goal,
         institution_name,
@@ -2401,11 +2346,9 @@ RÈGLES:
     // ------------------------------
     // Server-side normalization (ultimate guardrails)
     // ------------------------------
-    // ✅ Force domain/jurisdiction to system decision to avoid model drift.
     parsed.domain = domain_detected;
     parsed.jurisdiction = jurisdiction_selected;
 
-    // ✅ No-block conversions
     if (parsed.type === "clarify") {
       parsed.type = "answer";
       parsed.partial = true;
@@ -2417,11 +2360,9 @@ RÈGLES:
       parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "No-block: refus converti en réponse utile.";
     }
 
-    // Merge computed missing/ingest if model omitted
     if (!parsed.missing_coverage || parsed.missing_coverage.length === 0) parsed.missing_coverage = cov.missing_coverage ?? [];
     if (!parsed.ingest_needed || parsed.ingest_needed.length === 0) parsed.ingest_needed = cov.ingest_needed ?? [];
 
-    // Allowlist enforcement
     const allow = enforceAllowedSourceIds(parsed, allowed_source_ids);
     let bad_source_ids: string[] = [];
     if (!allow.ok) {
@@ -2431,14 +2372,12 @@ RÈGLES:
       parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "Certaines sources hors allowlist ont été retirées.";
     }
 
-    // If model picked none => pick best in-domain/jurisdiction (NOT random)
     if (!parsed.source_ids_used || parsed.source_ids_used.length === 0) {
       parsed.source_ids_used = bestFallbackSourceIds({ sources, domain: domain_detected, jurisdiction: jurisdiction_selected });
       parsed.partial = true;
-      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "Aucune source sélectionnée par le modèle; sélection serveur améliorée appliquée.";
+      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "Aucune source sélectionnée par le modèle; sélection serveur appliquée.";
     }
 
-    // Ensure ILAC exists
     if (!parsed.ilac) {
       parsed.ilac = buildServerIlacFallback({
         message,
@@ -2451,7 +2390,6 @@ RÈGLES:
       parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "ILAC manquant; ILAC serveur appliqué.";
     }
 
-    // Redact unsupported refs (anti-hallucination)
     let redactions: string[] = [];
     {
       const p1 = redactUnsupportedRefs(parsed.ilac.probleme ?? "", allowedCitationsLower);
@@ -2474,7 +2412,6 @@ RÈGLES:
       }
     }
 
-    // ✅ Absolute key: prevent wrong-regime content leaking into answer (Work QC vs Fed)
     const leak =
       hasForbiddenRegimeLeak({ text: parsed.ilac.probleme, domain: domain_detected, jurisdiction: jurisdiction_selected }) ||
       hasForbiddenRegimeLeak({ text: parsed.ilac.regle, domain: domain_detected, jurisdiction: jurisdiction_selected }) ||
@@ -2483,9 +2420,9 @@ RÈGLES:
 
     if (leak) {
       parsed.partial = true;
-      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "Incohérence de régime détectée; correction serveur (pas d’importation d’un autre régime).";
+      parsed.warning = (parsed.warning ? parsed.warning + " " : "") + "Incohérence de régime détectée; correction serveur.";
       parsed.missing_coverage = Array.from(new Set([...(parsed.missing_coverage ?? []), "Incohérence: le texte mentionnait un régime juridique d’une autre juridiction."]));
-      parsed.ingest_needed = Array.from(new Set([...(parsed.ingest_needed ?? []), "Ajouter au corpus les textes du régime applicable (dans la juridiction retenue) afin d’éviter tout recours au mauvais régime."]));
+      parsed.ingest_needed = Array.from(new Set([...(parsed.ingest_needed ?? []), "Ajouter au corpus les textes du régime applicable (dans la juridiction retenue) pour éviter tout recours au mauvais régime."]));
       parsed.ilac = buildServerIlacFallback({
         message,
         domain: domain_detected,
@@ -2501,7 +2438,14 @@ RÈGLES:
     }
 
     const examTip = wants_exam_tip && parsed.type === "answer" ? buildExamTip({ message, goal_mode: gmode, parsed, sources, distinctions }) : null;
-    const answer = formatAnswerFromModel(parsed, sources, serverWarning, examTip);
+
+    const answer = renderAnswer({
+      parsed,
+      sources,
+      distinctions,
+      serverWarning,
+      examTip: examTip ?? undefined,
+    });
 
     // ------------------------------
     // Logging QA
@@ -2509,7 +2453,6 @@ RÈGLES:
     await supaPost("/rest/v1/logs", {
       question: message,
       profile_slug: profile ?? null,
-      // Phase 4D
       course_slug,
       user_goal,
       institution_name,
