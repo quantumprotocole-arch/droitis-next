@@ -67,8 +67,8 @@ export default function AppClient({ isActive, status }: Props) {
   const [message, setMessage] = useState('Explique l’art. 1457 C.c.Q.')
   const [profile, setProfile] = useState<string>('')
   const [topK, setTopK] = useState<number>(5)
-  const [mode, setMode] = useState<string>('default')
-
+  const [mode, setMode] = useState<string>('prod')
+  const [userGoal, setUserGoal] = useState<string>('comprendre');
   const [courseSlug, setCourseSlug] = useState<string>('general');
   const [courses, setCourses] = useState<CourseOption[]>([])
   const [coursesLoading, setCoursesLoading] = useState<boolean>(false)
@@ -160,10 +160,12 @@ export default function AppClient({ isActive, status }: Props) {
         body: JSON.stringify({
           message,
           course_slug: courseSlug,
+          user_goal: userGoal,                 // ✅
           profile: profile || null,
           top_k: Math.max(1, Math.min(Number(topK) || 5, 20)),
-          mode,
-        }),
+          mode: mode || "prod",                // ✅
+      }),
+
       })
 
       const data: ApiResponse = await res.json()

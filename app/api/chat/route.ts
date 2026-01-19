@@ -626,11 +626,27 @@ function domainByCourseSlug(course_slug: string | null): Domain | null {
   const s = (course_slug ?? "").toLowerCase().trim();
   if (!s) return null;
 
-  if (s === "obligations-formation-des-contrats") return "Civil";
-  if (s === "responsabilite-civile") return "Civil";
+  // On s’appuie sur CourseProfile (ingestion pack) plutôt que des ifs fragiles.
+  const p: any = getCourseProfile(s);
+  const domains: string[] = Array.isArray(p?.B?.domaines) ? p.B.domaines : [];
+  const tags = domains.map((x) => String(x).toLowerCase());
+
+  const has = (...keys: string[]) => keys.some((k) => tags.some((t) => t.includes(k)));
+
+  if (has("pénal", "penal", "criminel", "crime", "procédure pénale")) return "Penal";
+  if (has("travail", "emploi", "syndicat", "relations de travail")) return "Travail";
+  if (has("fiscal", "tax", "impôt", "impot")) return "Fiscal";
+  if (has("administratif", "contentieux administratif", "taq", "cai")) return "Admin";
+  if (has("santé", "sante", "médical", "medical", "bioéthique")) return "Sante";
+
+  // Civil / obligations / contrats / responsabilité / biens / etc.
+  if (has("obligation", "contrat", "responsabilité", "responsabilite", "biens", "prescription", "assurance", "consommation")) {
+    return "Civil";
+  }
 
   return null;
 }
+
 
 // ------------------------------
 // Keyword extraction + expansion
@@ -1322,6 +1338,30 @@ async function hybridSearchWithRetry(args: {
 
   return { hits: [], hybridError: lastErr };
 }
+function hasStrongFedOverride(message: string): boolean {
+  // “Signaux forts” = mentions explicites ou faits imposant le fédéral.
+  // (Tu peux enrichir cette liste, mais elle doit rester stricte.)
+  return (
+    hasFedLegalSignals(message) ||
+    hasFedAdminAgencySignals(message) ||
+    hasFedPublicEmployerSignals(message) ||
+    hasFedWorkSectorSignals(message).matched ||
+    /\b(code criminel|criminal code|irpa|immigration and refugee protection)\b/i.test(message)
+  );
+}
+
+function hasStrongPenalOverride(message: string): boolean {
+  // Évite de basculer “Penal” pour des mots faibles (“sanction”, “amende”).
+  return /\b(code criminel|criminal code|mens rea|actus reus|accusation|infraction|procureur|dpcp)\b/i.test(message);
+}
+
+function courseJurisdictionLock(profileObj: any, course_slug: string): Jurisdiction | null {
+  const j = String(profileObj?.B?.juridiction_principale ?? "").toUpperCase().trim();
+  if (j === "QC") return "QC";
+  if (j === "CA-FED" || j === "FED") return "CA-FED";
+  if (j === "OTHER") return "OTHER";
+  return null;
+}
 
 // ------------------------------
 // Mapping helpers (course laws)
@@ -1434,6 +1474,18 @@ HYPOTHÈSES PAR DÉFAUT (si non mentionné)
 2) Juridiction : appliquer la juridiction majoritaire du domaine, sauf signal explicite ou exception typique.
 3) Tu indiques explicitement dans l’Application quand tu relies ton raisonnement à une hypothèse par défaut.
 
+RÈGLES DE STYLE (réponse visible):
+- En production, la réponse doit être conversationnelle, pédagogique et fluide.
+- Ne pas afficher: “Juridiction applicable…”, “Contexte partiel…”, ni des blocs ILAC répétitifs.
+- Utilise 1–2 sous-titres max, paragraphes courts.
+- Adapte au user_goal:
+  - comprendre: explication + analogie + mini-exemple guidé + mini-quiz (1 question).
+  - examen: checklist + pièges + “si tu vois X → fais Y”.
+  - reformuler: reformulation + correction des ambiguïtés + version corrigée.
+- Ajoute followups: 3 propositions max (“Si tu veux, je peux…”).
+- Les sources: cite uniquement via source_ids_used; n’invente jamais.
+
+
 PHASE 4B — RÉPONSE GRADUÉE
 - Le refus total doit être rare.
 - Si les sources sont limitées mais pertinentes : réponds quand même prudemment, et liste missing_coverage[] + ingest_needed[] si utile.
@@ -1445,6 +1497,12 @@ type ModelJson = {
   jurisdiction: Jurisdiction;
   domain?: Domain;
   ilac?: { probleme: string; regle: string; application: string; conclusion: string };
+
+  // ✅ Phase 4D “conversationnelle”
+  answer_markdown?: string;      // réponse finale “naturelle”
+  followups?: string[];          // 3 suggestions max
+  quiz?: { question: string; expected_points?: string[] }; // mini-quiz
+
   clarification_question?: string;
   refusal_reason?: string;
   partial?: boolean;
@@ -1453,6 +1511,7 @@ type ModelJson = {
   source_ids_used?: Array<string | number>;
   warning?: string;
 };
+
 
 function enforceAllowedSourceIds(parsed: ModelJson, allowed: string[]): { ok: boolean; bad: string[]; kept: string[] } {
   const used = (parsed.source_ids_used ?? []).map((x) => String(x));
@@ -1550,8 +1609,28 @@ function renderAnswer(args: {
   distinctions: DistinctionRow[];
   serverWarning?: string;
   examTip?: string;
+  mode: "prod" | "dev";
 }): string {
-  const { parsed, sources, serverWarning, examTip } = args;
+  const { parsed, sources, serverWarning, examTip, mode } = args;
+
+  if (mode === "prod") {
+    // retourne seulement une réponse fluide (answer_markdown si présent)
+    const body = (parsed.answer_markdown ?? "").trim();
+    const followups = (parsed.followups ?? []).slice(0, 3);
+    const sourcesLines = (parsed.source_ids_used ?? [])
+      .map((id) => sources.find((s) => String(s.id) === String(id))?.citation)
+      .filter(Boolean)
+      .map((c) => `- ${c}`)
+      .join("\n");
+
+    return [
+      body || (parsed.ilac ? `${parsed.ilac.conclusion}` : "Je te réponds au mieux avec le corpus actuel."),
+      followups.length ? `\n\n**Si tu veux, je peux :**\n${followups.map(f => `- ${f}`).join("\n")}` : "",
+      sourcesLines ? `\n\n**Sources (corpus)**\n${sourcesLines}` : "",
+    ].filter(Boolean).join("");
+  }
+
+
 
   const missingBlock =
     Array.isArray(parsed.missing_coverage) && parsed.missing_coverage.length
@@ -1786,11 +1865,36 @@ export async function POST(req: Request) {
     // Domain + Jurisdiction
     // ------------------------------
     let domain_detected = detectDomain(message);
-    const forced = domainByCourseSlug(course_slug);
-    if (forced && domain_detected === "Inconnu") domain_detected = forced;
 
-    const gate = jurisdictionGateNoBlock(message, domain_detected);
-    const jurisdiction_expected = gate.selected;
+    const forcedDomain = domainByCourseSlug(course_slug);
+    const lockedJur = courseJurisdictionLock(profileObj, course_slug);
+
+// 🔒 Domaine verrouillé si cours QC civil, sauf signaux forts
+if (
+  course_slug !== "general" &&
+  lockedJur === "QC" &&
+  forcedDomain === "Civil" &&
+  !hasStrongFedOverride(message) &&
+  !hasStrongPenalOverride(message)
+) {
+  domain_detected = "Civil";
+} else if (forcedDomain && domain_detected === "Inconnu") {
+  domain_detected = forcedDomain;
+}
+
+// 🔒 Juridiction verrouillée par cours (QC civil), sauf signaux forts explicites
+let gate = jurisdictionGateNoBlock(message, domain_detected);
+if (
+  course_slug !== "general" &&
+  lockedJur === "QC" &&
+  !gate.lock &&                                // pas de signal explicite déjà locké
+  !hasStrongFedOverride(message)
+) {
+  gate = { ...gate, selected: "QC", lock: true, reason: "course_lock_qc" };
+}
+
+const jurisdiction_expected = gate.selected;
+
 
     // ------------------------------
     // Embedding + hybrid retrieval
@@ -1825,8 +1929,9 @@ export async function POST(req: Request) {
             .join("\n---\n")
         : "(aucun kernel)";
 
-    const baseKeywords = extractKeywords(message, 10);
-    const { keywords } = expandQuery(message, baseKeywords, jurisdiction_expected, gate.assumptions.union_assumed);
+    const baseKeywords = extractKeywords(expandedQuery, 10);
+    const { keywords } = expandQuery(expandedQuery, baseKeywords, jurisdiction_expected, gate.assumptions.union_assumed);
+
     const article = detectArticleMention(message);
 
     // ------------------------------
@@ -1834,15 +1939,17 @@ export async function POST(req: Request) {
     // ------------------------------
     let hybridHits: HybridHit[] = [];
     let hybridError: string | null = null;
+    
     {
       const r = await hybridSearchWithRetry({
-        query_text: message,
+        query_text: expandedQuery,              // ✅ FIX
         query_embedding: queryEmbedding,
         domain: domain_detected,
         gate,
         jurisdiction_expected,
         goal_mode: gmode,
-      });
+    });
+
       hybridHits = r.hits;
       hybridError = r.hybridError;
       if (hybridError) console.warn("hybridSearchWithRetry failed:", hybridError);
@@ -1863,10 +1970,19 @@ export async function POST(req: Request) {
       console.warn("course mapping fetch failed:", e?.message ?? e);
     }
 
-    if (_allowedCodeIds && _allowedCodeIds.size) {
-      const filtered = (hybridHits ?? []).filter((h) => _allowedCodeIds!.has(normCodeId(h.code_id)));
-      if (filtered.length) hybridHits = filtered;
-    }
+    let strictLiteUsed = false;
+
+if (_allowedCodeIds && _allowedCodeIds.size) {
+  const filtered = (hybridHits ?? []).filter((h) => _allowedCodeIds!.has(normCodeId(h.code_id)));
+
+  if (filtered.length) {
+    hybridHits = filtered;          // ✅ strict OK
+  } else if ((hybridHits ?? []).length) {
+    strictLiteUsed = true;          // ✅ strict-lite fallback
+    // on garde hybridHits tel quel (sinon UX “aucune source”)
+  }
+}
+
 
     // ------------------------------
     // Distinctions (internal)
@@ -2451,13 +2567,16 @@ RÈGLES:
 
     const examTip = wants_exam_tip && parsed.type === "answer" ? buildExamTip({ message, goal_mode: gmode, parsed, sources, distinctions }) : null;
 
-    const answer = renderAnswer({
-      parsed,
-      sources,
-      distinctions,
-      serverWarning,
-      examTip: examTip ?? undefined,
-    });
+  const answer = renderAnswer({
+    parsed,
+    sources,
+    distinctions: distinctions ?? [],
+    serverWarning,
+    examTip,
+    mode: mode === "prod" ? "prod" : "dev",
+});
+
+
 
     // ------------------------------
     // Logging QA
