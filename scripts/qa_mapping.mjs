@@ -42,9 +42,10 @@ async function main() {
   const failures = [];
 
   // 1) Pull all law_registry mapped ingested>0
-  const lawRegistry = await getJson(
-    `/rest/v1/law_registry?select=law_key,canonical_code_id,ingested_articles,status&order=ingested_articles.desc.nullslast`
-  );
+ const lawRegistry = await getJson(
+  `/rest/v1/law_registry?select=law_key,canonical_code_id,status,last_ingested_at&order=last_ingested_at.desc.nullslast`
+);
+
 
   // 2) Pull all code_aliases
   const codeAliases = await getJson(`/rest/v1/code_aliases?select=canonical_code,aliases`);

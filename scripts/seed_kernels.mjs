@@ -1,7 +1,10 @@
 /* eslint-disable no-console */
-import "dotenv/config";
+import dotenv from "dotenv";
 import fs from "node:fs";
 import path from "node:path";
+
+dotenv.config({ path: [".env.local", ".env"] });
+
 
 const { OPENAI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
 
@@ -24,7 +27,7 @@ async function createEmbedding(input) {
 }
 
 async function supaUpsertKernels(rows) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/course_kernels?on_conflict=id`, {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/course_kernels?on_conflict=course_slug,topic`, {
     method: "POST",
     headers: {
       apikey: SUPABASE_SERVICE_ROLE_KEY,
@@ -37,6 +40,26 @@ async function supaUpsertKernels(rows) {
   if (!res.ok) {
     const t = await res.text().catch(() => "");
     throw new Error(`Supabase upsert failed ${res.status}: ${t}`);
+  }
+  return await res.json();
+}
+async function supaUpsertCourseCatalog(rows) {
+  // Ensure course slugs exist before inserting kernels (FK safety).
+  // We ignore duplicates to avoid overwriting curated titles/metadata.
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/course_catalog?on_conflict=course_slug`, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "resolution=ignore-duplicates,return=representation",
+    },
+    body: JSON.stringify(rows),
+  });
+
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`Supabase upsert course_catalog failed ${res.status}: ${t}`);
   }
   return await res.json();
 }
@@ -57,6 +80,33 @@ async function main() {
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error("kernels.seed.json invalide: attendu { kernels: [...] }");
   }
+    // --- FK safety: make sure all course slugs exist in course_catalog before upserting kernels ---
+  const slugs = Array.from(
+    new Set(
+      items
+        .map((it) => (typeof it?.course_slug === "string" ? it.course_slug.trim() : ""))
+        .filter(Boolean)
+    )
+  );
+
+  // Always ensure the default "general" course exists (even if not present in the seed file).
+  if (!slugs.includes("general")) slugs.unshift("general");
+
+  const courseRows = slugs.map((slug) => ({
+    course_slug: slug,
+    course_title: slug === "general" ? "Général (non mappé)" : slug,
+    scope: "all",
+    institution_note:
+      slug === "general"
+        ? "Mode général : explications et méthode, moins ciblé qu’un cours précis."
+        : null,
+    tags: slug === "general" ? ["general", "default"] : [],
+  }));
+
+  console.log(`Ensuring ${courseRows.length} course slugs exist in course_catalog...`);
+  await supaUpsertCourseCatalog(courseRows);
+  // --- end FK safety block ---
+
 
   const prepared = [];
   for (const k of items) {

@@ -1,0 +1,5 @@
+[
+  { "course_slug": "procedure-civile", "must_have_code_ids": ["C-25.01"] },
+  { "course_slug": "droit-et-technologies", "must_have_code_ids": ["P-39.1"] },
+  { "course_slug": "droit-de-l-environnement-et-developpement-durable", "must_have_code_ids": ["Q-2"] }
+]

@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "postinstall": "node scripts/copy-pdfjs-worker.mjs"
+    "postinstall": "node scripts/copy-pdfjs-worker.mjs",
+    "qa:mapping": "node scripts/qa_mapping.mjs",
+    "seed:kernels": "node scripts/seed_kernels.mjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.88",

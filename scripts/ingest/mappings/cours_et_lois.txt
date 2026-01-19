@@ -1,0 +1,552 @@
+{
+  "assurances": {
+    "required": [
+      { "law_key": "ccq", "title": "Code civil du Québec (contrat d’assurance)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_sur_les_assurances_qc", "title": "Loi sur les assurances (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "ldpsf_qc", "title": "Loi sur la distribution de produits et services financiers (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_assurance_automobile_qc", "title": "Loi sur l’assurance automobile (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Assurance = CCQ (règles contractuelles) + encadrement sectoriel (assurances/distribution) + régimes spéciaux (auto)."
+  },
+
+  "atelier-integration-transsystemique": {
+    "required": [],
+    "recommended": [
+      { "law_key": "ccq", "title": "Code civil du Québec (exemples civil)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "charte_canadienne", "title": "Charte canadienne (exemples)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "charte_qc", "title": "Charte des droits et libertés de la personne (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Atelier surtout “cas/raisonnement transsystémique” : ancrages généraux + chartes."
+  },
+
+  "biens-propriete-et-publicite": {
+    "required": [
+      { "law_key": "ccq", "title": "Code civil du Québec (biens, propriété, publicité des droits)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_cadastre_qc", "title": "Loi sur le cadastre (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_expropriation_qc", "title": "Loi sur l’expropriation (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Le cœur est dans le CCQ; on ajoute des textes “infrastructure/territoire” utiles en cas pratiques."
+  },
+
+  "commerce-international-et-investissement": {
+    "required": [
+      { "law_key": "un_act_ca", "title": "United Nations Act (sanctions ONU)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "export_import_permits_act", "title": "Export and Import Permits Act", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "customs_tariff_act", "title": "Customs Tariff / Tarif des douanes", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "customs_act", "title": "Customs Act / Loi sur les douanes", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "sema_ca", "title": "Special Economic Measures Act / Loi sur les mesures économiques spéciales", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "pcmltfa", "title": "PCMLTFA / Loi sur le recyclage des produits de la criminalité et le financement des activités terroristes", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "investment_canada_act", "title": "Investment Canada Act (contrôle des investissements)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Selon les plans de cours, on branche souvent export/douanes + sanctions + conformité (AML) + contrôle des investissements."
+  },
+
+  "contentieux-administratif-et-controle-judiciaire": {
+    "required": [
+      { "law_key": "loi_justice_administrative_qc", "title": "Loi sur la justice administrative (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "cpc_qc", "title": "Code de procédure civile (contrôle judiciaire, procédure)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "charte_qc", "title": "Charte québécoise (équité procédurale / droits)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "federal_courts_act", "title": "Federal Courts Act (contrôle judiciaire fédéral)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "QC: TAQ/LJA + CPC; on ajoute chartes et pendant fédéral pour les dossiers mixtes."
+  },
+
+  "contrats-speciaux-et-entreprise": {
+    "required": [
+      { "law_key": "ccq", "title": "Code civil du Québec (contrats nommés / entreprise)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_publicite_legale_entreprises_qc", "title": "Loi sur la publicité légale des entreprises (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "lsap_qc", "title": "Loi sur les sociétés par actions (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "cbca", "title": "Loi canadienne sur les sociétés par actions (CBCA)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Contrats spéciaux = CCQ; volet entreprise = registre + structures corporatives (QC/CA)."
+  },
+
+  "deontologie-et-profession": {
+    "required": [
+      { "law_key": "professional_code_qc", "title": "Code des professions (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_barreau_qc", "title": "Loi sur le Barreau (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_notariat_qc", "title": "Loi sur le notariat (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "code_deontologie_avocats_qc", "title": "Code de déontologie des avocats (QC) (règlement)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "charte_qc", "title": "Charte québécoise (cadre droits/égalité)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_prp_secteur_prive_qc", "title": "PRP secteur privé (QC) (P-39.1)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Déonto/profession: régime professionnel (Code des professions) + loi constitutive (Barreau/Notariat) + règlements + PRP."
+  },
+
+  "droit-administratif": {
+    "required": [
+      { "law_key": "loi_justice_administrative_qc", "title": "Loi sur la justice administrative (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_acces_documents_qc", "title": "Accès organismes publics + PRP (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "charte_qc", "title": "Charte québécoise (droits/recours)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "federal_courts_act", "title": "Federal Courts Act (repères fédéraux)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Cours “tronc commun” : LJA + accès/PRP + chartes + repères de contrôle judiciaire."
+  },
+
+  "droit-aerien-et-spatial": {
+    "required": [
+      { "law_key": "aeronautics_act", "title": "Aeronautics Act (Canada) — RSC 1985, c. A-2", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "remote_sensing_space_systems_act", "title": "Remote Sensing Space Systems Act (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "canadian_space_agency_act", "title": "Canadian Space Agency Act (Canada)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "canada_transportation_act", "title": "Canada Transportation Act (transport aérien — aperçu)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "carriage_by_air_act", "title": "Carriage by Air Act (responsabilité/transport international)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "sema_ca", "title": "Loi sur les mesures économiques spéciales (sanctions — spatial)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Aviation (Aeronautics Act) + régulation spatiale (RSSSA/CSA Act) + couches transport/sanctions selon modules."
+  },
+
+  "droit-compare": {
+    "required": [],
+    "recommended": [
+      { "law_key": "ccq", "title": "Code civil du Québec (exemples civil)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_constitutionnelle_1867", "title": "Loi constitutionnelle de 1867 (exemples fédéralisme)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Droit comparé : lois utilisées comme “objets de comparaison”, pas comme corpus exclusif."
+  },
+
+  "droit-constitutionnel": {
+    "required": [
+      { "law_key": "loi_constitutionnelle_1867", "title": "Loi constitutionnelle de 1867", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "loi_constitutionnelle_1982", "title": "Loi constitutionnelle de 1982", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "charte_canadienne", "title": "Charte canadienne des droits et libertés", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "supreme_court_act", "title": "Supreme Court Act / Loi sur la Cour suprême", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "interpretation_act_ca", "title": "Interpretation Act / Loi d’interprétation (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "charte_qc", "title": "Charte québécoise (droits quasi-constitutionnels)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Constitutionnel: textes constitutionnels + Charte; on ajoute Cour suprême et interprétation."
+  },
+
+  "droit-de-l-environnement-et-developpement-durable": {
+    "required": [
+      { "law_key": "lqe_qc", "title": "Loi sur la qualité de l’environnement (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "cepa_ca", "title": "Loi canadienne sur la protection de l’environnement (LCPE/CEPA)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "fisheries_act", "title": "Fisheries Act (volet environnement)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "species_at_risk_act", "title": "Species at Risk Act / Loi sur les espèces en péril", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "impact_assessment_act", "title": "Impact Assessment Act / Loi sur l’évaluation d’impact", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "loi_mines_qc", "title": "Loi sur les mines (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_hydrocarbures_qc", "title": "Loi sur les hydrocarbures (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Tronc QC (LQE) + tronc fédéral (LCPE), puis régimes sectoriels (pêches/espèces/évaluation + mines/hydrocarbures)."
+  },
+
+  "droit-de-l-immigration-et-refugies": {
+    "required": [
+      { "law_key": "irpa", "title": "Loi sur l’immigration et la protection des réfugiés (IRPA)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "citizenship_act", "title": "Citizenship Act / Loi sur la citoyenneté (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "federal_courts_act", "title": "Federal Courts Act (contrôle judiciaire)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "charte_canadienne", "title": "Charte canadienne (droits fondamentaux)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Immigration: IRPA + citoyenneté + contrôle judiciaire + droits fondamentaux."
+  },
+
+  "droit-de-la-concurrence": {
+    "required": [
+      { "law_key": "competition_act", "title": "Competition Act / Loi sur la concurrence", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "investment_canada_act", "title": "Investment Canada Act (investissements étrangers)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "criminal_code_ca", "title": "Code criminel (infractions économiques — aperçu)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Cœur = Loi sur la concurrence; on ajoute le contexte investissements et certaines jonctions pénales."
+  },
+
+  "droit-de-la-consommation": {
+    "required": [
+      { "law_key": "lpc_qc", "title": "Loi sur la protection du consommateur (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "ccq", "title": "Code civil du Québec (complément)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "competition_act", "title": "Loi sur la concurrence (publicité trompeuse — aperçu)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": null
+  },
+
+  "droit-des-affaires-et-entreprise": {
+    "required": [
+      { "law_key": "lsap_qc", "title": "Loi sur les sociétés par actions (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_publicite_legale_entreprises_qc", "title": "Loi sur la publicité légale des entreprises (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "cbca", "title": "Loi canadienne sur les sociétés par actions (CBCA)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "bank_act", "title": "Bank Act / Loi sur les banques (aperçu financement)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "bankruptcy_insolvency_act", "title": "Loi sur la faillite et l’insolvabilité (aperçu)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Affaires: structures (QC) + registre; puis ponts vers fédéral (CBCA) et finance/insolvabilité selon modules."
+  },
+
+  "droit-du-travail-collectif": {
+    "required": [
+      { "law_key": "code_travail_qc", "title": "Code du travail (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_regime_negociation_public_parapublic_qc", "title": "Régime de négociation secteur public et parapublic (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "canada_labour_code", "title": "Canada Labour Code (collectif — compétence fédérale)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "charte_qc", "title": "Charte québécoise (liberté d’association — contexte)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "charte_canadienne", "title": "Charte canadienne (liberté d’association — contexte)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Collectif: Code du travail (QC) + secteurs spéciaux + compétence fédérale + ancrage chartes."
+  },
+
+  "droit-du-travail-individuel": {
+    "required": [
+      { "law_key": "lnt_qc", "title": "Loi sur les normes du travail (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "latmp_qc", "title": "Loi sur les accidents du travail et les maladies professionnelles (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_equite_salariale_qc", "title": "Loi sur l’équité salariale (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "canada_labour_code", "title": "Canada Labour Code (individuel — compétence fédérale)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "charte_qc", "title": "Charte québécoise (discrimination/harcèlement — contexte)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Individuel: normes minimales + santé/sécurité/indemnisation + équité + compétence fédérale + droits fondamentaux."
+  },
+
+  "droit-et-technologies": {
+    "required": [
+      { "law_key": "pipeda", "title": "LPRPDE / PIPEDA (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "loi_prp_secteur_prive_qc", "title": "PRP secteur privé (QC) (P-39.1)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_acces_documents_qc", "title": "Accès organismes publics + PRP (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "access_to_information_act", "title": "Access to Information Act (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "privacy_act_ca", "title": "Privacy Act (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "loi_cadre_juridique_ti_qc", "title": "Cadre juridique des TI (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "copyright_act", "title": "Loi sur le droit d’auteur (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "code_criminel", "title": "Code criminel (cyberinfractions — aperçu)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "casl", "title": "Loi canadienne anti-pourriel (CASL)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Tech: données (privé/public) + accès + TI (écrit/preuve) + PI + cyberinfractions + anti-pourriel."
+  },
+
+  "droit-international-prive": {
+    "required": [
+      { "law_key": "ccq", "title": "Code civil du Québec (DIP privé — rattachements, conflits, reconnaissance)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "cpc_qc", "title": "Code de procédure civile (reconnaissance/exécution, procédure)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Le cœur du DIP privé au Québec est traité via le CCQ (et la procédure via le CPC)."
+  },
+
+  "droit-international-public": {
+    "required": [
+      { "law_key": "state_immunity_act", "title": "State Immunity Act / Loi sur l’immunité des États", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "un_act_ca", "title": "United Nations Act (mise en œuvre ONU)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "sema_ca", "title": "Special Economic Measures Act (sanctions)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "extradition_act", "title": "Extradition Act / Loi sur l’extradition", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "crimes_against_humanity_war_crimes_act", "title": "Crimes Against Humanity and War Crimes Act", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "DIP public: immunités + ONU/sanctions + coopération (extradition) + pénal international (war crimes)."
+  },
+
+  "droit-municipal-et-amenagement": {
+    "required": [
+      { "law_key": "loi_amenagement_urbanisme", "title": "Loi sur l’aménagement et l’urbanisme (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "code_municipal_qc", "title": "Code municipal du Québec", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_cites_villes_qc", "title": "Loi sur les cités et villes (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_fiscalite_municipale_qc", "title": "Loi sur la fiscalité municipale (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_expropriation_qc", "title": "Loi sur l’expropriation (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "lptaa_qc", "title": "Loi sur la protection du territoire et des activités agricoles (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": null
+  },
+
+  "droit-penal-general": {
+    "required": [
+      { "law_key": "code_criminel", "title": "Code criminel (Canada)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "cdsa", "title": "Controlled Drugs and Substances Act", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "ycja", "title": "Youth Criminal Justice Act", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Pénal général: Code criminel + thèmes récurrents (drogues / jeunesse)."
+  },
+
+  "droits-autochtones-et-traditions-juridiques": {
+    "required": [
+      { "law_key": "loi_constitutionnelle_1982", "title": "Loi constitutionnelle de 1982", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_constitutionnelle_1867", "title": "Loi constitutionnelle de 1867", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "indian_act", "title": "Loi sur les Indiens (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "un_drip_act_ca", "title": "Loi sur la DNUDPA / UNDRIP Act (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "charte_canadienne", "title": "Charte canadienne", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": null
+  },
+
+  "droits-et-libertes": {
+    "required": [
+      { "law_key": "charte_canadienne", "title": "Charte canadienne des droits et libertés", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "charte_qc", "title": "Charte des droits et libertés de la personne (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "canadian_human_rights_act", "title": "Canadian Human Rights Act", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "loi_commission_droits_personne_qc", "title": "Loi sur la Commission des droits de la personne et des droits de la jeunesse (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Cours axé chartes + mécanismes/recours (fédéral et QC)."
+  },
+
+  "enfance-jeunesse-et-protection": {
+    "required": [
+      { "law_key": "lpj_qc", "title": "Loi sur la protection de la jeunesse (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "ycja", "title": "Youth Criminal Justice Act (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "ccq", "title": "Code civil du Québec (autorité parentale, tutelle, etc. — aperçu)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Protection jeunesse = LPJ; on branche parfois vers régime pénal jeunesse et notions CCQ selon cas."
+  },
+
+  "faillite-et-insolvabilite": {
+    "required": [
+      { "law_key": "bankruptcy_insolvency_act", "title": "Loi sur la faillite et l’insolvabilité (Canada) (BIA)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "ccaa", "title": "Companies’ Creditors Arrangement Act (CCAA)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "winding_up_restructuring_act", "title": "Winding-up and Restructuring Act", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Insolvabilité: BIA + restructurations (CCAA) + régimes de liquidation/recadrage."
+  },
+
+  "fiscalite": {
+    "required": [
+      { "law_key": "income_tax_act", "title": "Income Tax Act / Loi de l’impôt sur le revenu (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "loi_impots_qc", "title": "Loi sur les impôts (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "excise_tax_act", "title": "Excise Tax Act (TPS/TVH)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "tvq_qc", "title": "Loi sur la taxe de vente du Québec (TVQ)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "cra_act", "title": "Canada Revenue Agency Act", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Fiscalité: impôt (CA/QC) + taxes (TPS/TVQ) + administration fiscale."
+  },
+
+  "interpretation-juridique": {
+    "required": [
+      { "law_key": "loi_interpretation_qc", "title": "Loi d’interprétation (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "interpretation_act_ca", "title": "Interpretation Act / Loi d’interprétation (Canada)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Interprétation: QC en premier, puis pendant fédéral."
+  },
+
+  "introduction-au-droit-et-methodologie": {
+    "required": [],
+    "recommended": [
+      { "law_key": "loi_interpretation_qc", "title": "Loi d’interprétation (QC) — repères méthodo", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "cpc_qc", "title": "Code de procédure civile (repères institutionnels — aperçu)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Cours d’introduction: ancrages “méthode/lecture” plutôt que corpus spécialisé."
+  },
+
+  "modes-prives-et-gestion-des-differends": {
+    "required": [
+      { "law_key": "cpc_qc", "title": "Code de procédure civile (PRD/MPRD & homologation - pratique)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "ccq", "title": "Code civil du Québec (transaction, clauses, arbitrage - aperçu)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "commercial_arbitration_act", "title": "Commercial Arbitration Act (Canada)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Conformément à ta consigne, tout le contenu ‘arbitrage-de-griefs’ est consolidé ici."
+  },
+
+  "obligations-execution-extinction-et-remedes": {
+    "required": [
+      { "law_key": "ccq", "title": "Code civil du Québec (exécution, extinction, remèdes)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [],
+    "notes": null
+  },
+
+  "obligations-formation-des-contrats": {
+    "required": [
+      { "law_key": "ccq", "title": "Code civil du Québec (formation des contrats)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [],
+    "notes": null
+  },
+
+  "obligations-responsabilite-civile": {
+    "required": [
+      { "law_key": "ccq", "title": "Code civil du Québec (responsabilité civile)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_assurance_automobile_qc", "title": "Loi sur l’assurance automobile (QC) (régime spécial)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "ivac_qc", "title": "Loi sur l’indemnisation des victimes d’actes criminels (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Conformément à ta consigne, tout ce qui était dans ‘responsabilite-civile’ est consolidé ici."
+  },
+
+  "personnes-famille-et-patrimoine-familial": {
+    "required": [
+      { "law_key": "ccq", "title": "Code civil du Québec (personnes/famille/patrimoine)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "divorce_act", "title": "Divorce Act / Loi sur le divorce (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "loi_aide_juridique_qc", "title": "Loi sur l’aide juridique (QC) (accès à la justice — aperçu)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Famille: CCQ + Loi sur le divorce (fédéral) + accès à la justice selon modules."
+  },
+
+  "preuve-civile-et-administrative": {
+    "required": [
+      { "law_key": "cpc_qc", "title": "Code de procédure civile (preuve civile)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "ccq", "title": "Code civil du Québec (preuve / présomptions — aperçu)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_cadre_juridique_ti_qc", "title": "Cadre juridique des TI (QC) (écrit/technologies)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "canada_evidence_act", "title": "Canada Evidence Act / Loi sur la preuve au Canada (aperçu fédéral)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Preuve: CPC (procédure) + CCQ (notions) + TI (écrit/tech) + pendant fédéral si nécessaire."
+  },
+
+  "procedure-civile": {
+    "required": [
+      { "law_key": "cpc_qc", "title": "Code de procédure civile (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_tribunaux_judiciaires_qc", "title": "Loi sur les tribunaux judiciaires (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_huissiers_qc", "title": "Loi sur les huissiers de justice (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Procédure: CPC + organisation judiciaire + exécution/signification."
+  },
+
+  "procedure-et-preuve-penales": {
+    "required": [
+      { "law_key": "code_criminel", "title": "Code criminel (procédure pénale)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "canada_evidence_act", "title": "Canada Evidence Act / Loi sur la preuve au Canada", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "ycja", "title": "Youth Criminal Justice Act", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "cdsa", "title": "Controlled Drugs and Substances Act (contextes fréquents)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Procédure/preuve pénales: Code criminel + preuve (fédéral) + régimes spécifiques courants."
+  },
+
+  "propriete-intellectuelle": {
+    "required": [
+      { "law_key": "copyright_act", "title": "Loi sur le droit d’auteur (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "trademarks_act", "title": "Loi sur les marques de commerce (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "patent_act", "title": "Loi sur les brevets (Canada)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "industrial_design_act", "title": "Loi sur les dessins industriels (Canada)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": null
+  },
+
+  "recherche-juridique": {
+    "required": [],
+    "recommended": [
+      { "law_key": "loi_interpretation_qc", "title": "Loi d’interprétation (QC) (outillage méthodo)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "interpretation_act_ca", "title": "Loi d’interprétation (Canada) (outillage méthodo)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Recherche: surtout méthodologie; lois d’interprétation servent d’exemples de lecture structurée."
+  },
+
+  "redaction-juridique": {
+    "required": [],
+    "recommended": [
+      { "law_key": "loi_interpretation_qc", "title": "Loi d’interprétation (QC) (style/structure)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Rédaction: ancrage sur interprétation/structure; le reste dépend des exercices."
+  },
+
+  "redaction-legislative-et-technique-notariale": {
+    "required": [
+      { "law_key": "loi_interpretation_qc", "title": "Loi d’interprétation (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "interpretation_act_ca", "title": "Loi d’interprétation (Canada)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "professional_code_qc", "title": "Code des professions (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_notariat_qc", "title": "Loi sur le notariat (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_barreau_qc", "title": "Loi sur le Barreau (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_assemblee_nationale_qc", "title": "Loi sur l’Assemblée nationale (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "charte_langue_fr", "title": "Charte de la langue française (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Rédaction normative + technique notariale: interprétation (QC/CA) + cadre pro + institutions + langue."
+  },
+
+  "societes-par-actions-et-gouvernance": {
+    "required": [
+      { "law_key": "lsap_qc", "title": "Loi sur les sociétés par actions (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "cbca", "title": "Loi canadienne sur les sociétés par actions (CBCA)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_valeurs_mobilieres_qc", "title": "Loi sur les valeurs mobilières (QC) (divulgation — aperçu)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_publicite_legale_entreprises_qc", "title": "Loi sur la publicité légale des entreprises (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "notes": "Gouvernance: LSAP/CBCA + ponts vers divulgation (valeurs mobilières) et registre."
+  },
+
+  "successions-liberalites-et-fiducies": {
+    "required": [
+      { "law_key": "ccq", "title": "Code civil du Québec (successions, libéralités, fiducies)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_impots_qc", "title": "Loi sur les impôts (QC) (aperçu fiscal successoral)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "income_tax_act", "title": "Income Tax Act (Canada) (aperçu fiscal successoral)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Cœur = CCQ; on ajoute les ponts fiscaux quand le cours couvre liquidation/impacts fiscaux."
+  },
+
+  "suretes-priorites-et-hypotheques": {
+    "required": [
+      { "law_key": "ccq", "title": "Code civil du Québec (sûretés, priorités, hypothèques)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "bank_act", "title": "Bank Act / Loi sur les banques (sûretés bancaires — aperçu)", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "bankruptcy_insolvency_act", "title": "Loi sur la faillite et l’insolvabilité (priorités — aperçu)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Sûretés: CCQ, puis jonctions fréquentes banque/insolvabilité."
+  },
+
+  "theorie-et-philosophie-du-droit": {
+    "required": [],
+    "recommended": [
+      { "law_key": "loi_interpretation_qc", "title": "Loi d’interprétation (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_constitutionnelle_1982", "title": "Loi constitutionnelle de 1982", "jurisdiction": "CA", "status": "ingested" },
+      { "law_key": "charte_canadienne", "title": "Charte canadienne", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Cours doctrinal/critique : les lois servent d’exemples (légitimité, interprétation, droits)."
+  },
+
+  "valeurs-mobilieres-et-financement": {
+    "required": [
+      { "law_key": "loi_valeurs_mobilieres_qc", "title": "Loi sur les valeurs mobilières (QC)", "jurisdiction": "QC", "status": "ingested" }
+    ],
+    "recommended": [
+      { "law_key": "loi_amf_qc", "title": "Loi sur l’Autorité des marchés financiers (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "loi_instruments_derives_qc", "title": "Loi sur les instruments dérivés (QC)", "jurisdiction": "QC", "status": "ingested" },
+      { "law_key": "bank_act", "title": "Bank Act / Loi sur les banques (financement — aperçu)", "jurisdiction": "CA", "status": "ingested" }
+    ],
+    "notes": "Valeurs mobilières: loi-cœur (QC) + régulateur + dérivés + ponts finance bancaire."
+  }
+}

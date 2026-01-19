@@ -1,6 +1,8 @@
 /* eslint-disable no-console */
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getCourseProfile, expandQueryWithProfile, courseContext } from "@/lib/courseProfiles";
+
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -1374,23 +1376,19 @@ async function getIngestNeededForCourse(course_slug: string): Promise<string[]> 
   const lawKeys = reqRows.map((r) => r.law_key).filter(Boolean);
   const inList = lawKeys.map((k) => `"${k.replace(/"/g, '\\"')}"`).join(",");
 
-  type LR = { law_key: string; status: string | null; ingested_articles: number | null; canonical_code_id: string | null };
-  let lr: LR[] = [];
-  try {
-    lr = await supaGet<LR[]>(
-      `/rest/v1/law_registry?law_key=in.(${encodeURIComponent(inList)})&select=law_key,status,ingested_articles,canonical_code_id`
-    );
-  } catch {
-    return [];
-  }
+ type LR = { law_key: string; status: string | null; canonical_code_id: string | null };
 
-  const out: string[] = [];
-  for (const r of lr) {
-    const cnt = r.ingested_articles ?? 0;
-    const st = (r.status ?? "").toLowerCase();
-    if (cnt <= 0 || st === "to_ingest") out.push(r.canonical_code_id ?? r.law_key);
-  }
-  return Array.from(new Set(out)).slice(0, 24);
+const lr = await supaGet<LR[]>(
+  `/rest/v1/law_registry?law_key=in.(${encodeURIComponent(inList)})&select=law_key,status,canonical_code_id`
+);
+
+const out: string[] = [];
+for (const r of lr) {
+  const st = (r.status ?? "").toLowerCase();
+  if (st !== "ingested") out.push(r.canonical_code_id ?? r.law_key);
+}
+return Array.from(new Set(out)).slice(0, 24);
+
 }
 
 async function fetchTopDistinctions(course_slug: string, limit = 8): Promise<DistinctionRow[]> {
@@ -1419,7 +1417,7 @@ async function fetchTopDistinctions(course_slug: string, limit = 8): Promise<Dis
 // ------------------------------
 const SYSTEM_PROMPT = `
 Tu es Droitis, tuteur IA spécialisé en droit québécois ET canadien (QC/CA-FED) selon la juridiction applicable.
-Tu réponds en ILAC/IRAC : Problème → Règle → Application → Conclusion.
+Structure implicite (problème → règle → application → conclusion) ; sous-titres seulement si ça aide.
 
 INTERDICTIONS
 - Interdiction absolue : inventer une loi, un article, une décision, une citation, ou un lien.
@@ -1762,7 +1760,12 @@ export async function POST(req: Request) {
       );
     }
 
-    const course_slug = typeof body.course_slug === "string" && body.course_slug.trim() ? body.course_slug.trim() : null;
+    const course_slug_raw = (body?.course_slug ?? '').trim();
+    const course_slug =
+    typeof body.course_slug === "string" && body.course_slug.trim()
+      ? body.course_slug.trim()
+      : "general";
+
     const user_goal = typeof body.user_goal === "string" && body.user_goal.trim() ? body.user_goal.trim() : null;
     const institution_name = typeof body.institution_name === "string" && body.institution_name.trim() ? body.institution_name.trim() : null;
 
@@ -1774,6 +1777,8 @@ export async function POST(req: Request) {
     const mode = (body.mode ?? "prod").toLowerCase();
 
     const intent = inferIntent({ message, user_goal });
+    const profileObj = getCourseProfile(course_slug) ?? getCourseProfile("general");
+    const { expanded: expandedQuery } = expandQueryWithProfile(message, profileObj);
     const gmode = intent.goal_mode;
     const wants_exam_tip = intent.wants_exam_tip;
 
@@ -1790,7 +1795,7 @@ export async function POST(req: Request) {
     // ------------------------------
     // Embedding + hybrid retrieval
     // ------------------------------
-    const queryEmbedding = await createEmbedding(message);
+    const queryEmbedding = await createEmbedding(expandedQuery);
     if (!queryEmbedding) return json({ error: "Échec embedding" }, 500);
 
     // ------------------------------
@@ -2149,7 +2154,10 @@ ${pits || "- (none)"}`;
         user_id: user.id,
       }).catch((e) => console.warn("log insert failed:", e));
 
-      return json({
+    const clientPayload =
+  mode === "prod"
+    ? { answer, sources: [] } // ✅ prod: pas de diagnostics
+    : {
         answer,
         sources: [],
         usage: {
@@ -2167,7 +2175,10 @@ ${pits || "- (none)"}`;
           kernels_count: kernelHits.length,
           distinctions_count: distinctions.length,
         },
-      });
+      };
+
+return json(clientPayload);
+
     }
 
     // ------------------------------
@@ -2191,6 +2202,7 @@ ${pits || "- (none)"}`;
       sources
         .map((s) => `SOURCE id=${s.id}\nCitation: ${s.citation}\nJuridiction: ${s.jur}\nURL: ${s.url ?? ""}\nExtrait:\n${s.snippet ?? ""}`)
         .join("\n---\n") || "(aucun extrait)";
+const cp = courseContext(profileObj);
 
     // ------------------------------
     // Model payload

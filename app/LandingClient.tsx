@@ -41,8 +41,7 @@ export default function HomePage() {
   const [profile, setProfile] = useState<string>('');
   const [topK, setTopK] = useState<number>(5);
   const [mode, setMode] = useState<string>('default');
-
-  const [courseSlug, setCourseSlug] = useState<string>('');
+  const [courseSlug, setCourseSlug] = useState<string>('general');
   const [courses, setCourses] = useState<CourseOption[]>([]);
   const [coursesLoading, setCoursesLoading] = useState<boolean>(false);
   const [coursesError, setCoursesError] = useState<string | null>(null);
@@ -102,7 +101,7 @@ export default function HomePage() {
           course_slug: courseSlug,
           profile: profile || null,
           top_k: Math.max(1, Math.min(Number(topK) || 5, 20)),
-          mode,
+          mode, 
         }),
       });
 
@@ -304,9 +303,12 @@ export default function HomePage() {
               )}
             </div>
 
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-              usage: {usage ? JSON.stringify(usage) : '(n/a)'}
-            </div>
+            {mode !== 'prod' ? (
+        <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
+           usage: {usage ? JSON.stringify(usage) : '(n/a)'}
+        </div>
+      ) : null}
+
           </section>
         ) : null}
       </div>

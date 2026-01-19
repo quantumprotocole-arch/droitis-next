@@ -69,7 +69,7 @@ export default function AppClient({ isActive, status }: Props) {
   const [topK, setTopK] = useState<number>(5)
   const [mode, setMode] = useState<string>('default')
 
-  const [courseSlug, setCourseSlug] = useState<string>('')
+  const [courseSlug, setCourseSlug] = useState<string>('general');
   const [courses, setCourses] = useState<CourseOption[]>([])
   const [coursesLoading, setCoursesLoading] = useState<boolean>(false)
   const [coursesError, setCoursesError] = useState<string | null>(null)
