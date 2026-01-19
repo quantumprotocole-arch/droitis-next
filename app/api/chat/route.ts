@@ -1631,6 +1631,22 @@ function renderAnswer(args: {
   }
 
 
+function ensureMinLength(answer: string, args: { message: string; gmode: string }) {
+  const min = args.gmode === "comprendre" ? 1200 : args.gmode === "examen" ? 900 : 700; // caractères
+  if ((answer ?? "").trim().length >= min) return answer;
+
+  // expansion déterministe (sans 2e appel OpenAI) :
+  return [
+    answer.trim(),
+    "",
+    "—",
+    "",
+    "Pour être certain de bien te guider :",
+    "1) Peux-tu préciser le contexte factuel (2–3 lignes) ?",
+    "2) Est-ce que tu vises une réponse **examen** (checklist) ou **compréhension** (explication + exemple) ?",
+  ].join("\n");
+}
+
 
   const missingBlock =
     Array.isArray(parsed.missing_coverage) && parsed.missing_coverage.length
@@ -2567,7 +2583,7 @@ RÈGLES:
 
     const examTip = wants_exam_tip && parsed.type === "answer" ? buildExamTip({ message, goal_mode: gmode, parsed, sources, distinctions }) : null;
 
-  const answer = renderAnswer({
+  let answer = renderAnswer({
     parsed,
     sources,
     distinctions: distinctions ?? [],
@@ -2624,27 +2640,34 @@ RÈGLES:
       user_id: user.id,
     }).catch((e) => console.warn("log insert failed:", e));
 
-    return json({
-      answer,
-      sources,
-      usage: {
-        type: parsed.type,
-        goal_mode: gmode,
-        domain_detected,
-        jurisdiction_expected,
-        jurisdiction_selected,
-        jurisdiction_lock: gate.lock,
-        rag_quality,
-        relevance_ok,
-        coverage_ok,
-        had_qc_source,
-        article_confidence,
-        missing_coverage: parsed.missing_coverage ?? [],
-        hybrid_error: hybridError,
-        kernels_count: kernelHits.length,
-        distinctions_count: distinctions.length,
-      },
-    });
+   const followups = Array.isArray(parsed.followups) ? parsed.followups.slice(0, 3) : [];
+
+if (mode === "prod") {
+  return json({ answer, sources, followups });
+}
+
+return json({
+  answer,
+  sources,
+  followups,
+  usage: {
+    type: parsed.type,
+    goal_mode: gmode,
+    domain_detected,
+    jurisdiction_expected,
+    jurisdiction_selected,
+    jurisdiction_lock: gate.lock,
+    rag_quality,
+    relevance_ok,
+    coverage_ok,
+    had_qc_source,
+    article_confidence,
+    missing_coverage: parsed.missing_coverage ?? cov.missing_coverage ?? [],
+    distinctions_count: distinctions.length,
+    kernels_count: kernelHits.length,
+    hybrid_error: hybridError,
+  },
+});
   } catch (e: any) {
     console.error("chat route error:", e);
     return json({ error: e?.message ?? "Unknown error" }, 500);
