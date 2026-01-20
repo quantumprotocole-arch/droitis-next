@@ -83,7 +83,7 @@ type DistinctionRow = {
 // ------------------------------
 // Env
 // ------------------------------
-const { OPENAI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
+const { OPENAI_API_KEY } = process.env;
 
 // ------------------------------
 // Helpers
@@ -1161,42 +1161,44 @@ function buildAlwaysAnswerFallback(args: {
   missing_coverage?: string[];
   ingest_needed?: string[];
 }): string {
-  const { message, domain, gate, hybridError } = args;
+  const { message, domain, gate } = args;
 
-  const warn = hybridError ? `⚠️ HYBRID_RPC_WARNING: ${hybridError}\n\n` : "";
-  const unionTxt = gate.assumptions.union_assumed ? "syndiqué (signal détecté)" : "NON syndiqué (hypothèse par défaut: aucun signal)";
-  const jurTxt = gate.selected;
+  const unionTxt = gate.assumptions.union_assumed
+    ? "on dirait que la situation implique un contexte syndiqué"
+    : "à défaut d’indice, je suppose un contexte non syndiqué (à ajuster si besoin)";
 
   const missing =
     (args.missing_coverage ?? []).length > 0
       ? (args.missing_coverage ?? []).map((x) => `- ${x}`).join("\n")
-      : "- Aucune source pertinente (ou aucune source dans la juridiction applicable).";
+      : "- Aucune source pertinente n’a été retrouvée dans le corpus.";
 
   const ingest =
     (args.ingest_needed ?? []).length > 0
       ? (args.ingest_needed ?? []).map((x) => `- ${x}`).join("\n")
-      : [
-          "- Texte officiel de la loi/règlement pertinent (QC ou CA selon la situation)",
-          "- Articles précis visés (si connus)",
-          "- Toute politique/contrat/convention collective si applicable (sinon hypothèse par défaut: non syndiqué)",
-        ].join("\n");
+      : "- (rien de spécifique détecté)";
 
-  return (
-    `${warn}` +
-    `**Juridiction applicable (heuristique/exception) : ${jurTxt}**\n` +
-    `**Domaine : ${domain}**\n\n` +
-    `**Hypothèses par défaut utilisées**\n- Travail : ${unionTxt}\n\n` +
-    `**Problème**\n${message}\n\n` +
-    `**Règle**\nJe ne peux pas citer une règle précise sans extraits applicables dans le corpus.\n\n` +
-    `**Application**\nSans extraits du régime applicable, je ne peux pas conclure au fond sans inventer.\n\n` +
-    `**Conclusion**\nJe peux toutefois t’aider à structurer l’analyse; pour des citations précises, il faut compléter le corpus.\n\n` +
-    `**Couverture manquante**\n${missing}\n\n` +
-    `**À ingérer pour compléter**\n${ingest}\n`
-  );
+  // Pas de “blocs debug” visibles: on reste pédagogique + prudent.
+  return [
+    `Je peux t’aider, mais je n’ai pas retrouvé d’extraits fiables dans le corpus pour appuyer des citations.`,
+
+    domain === "Travail" ? `\n*(Contexte de travail: ${unionTxt}.)*\n` : "",
+
+    `\nVoici une façon sûre d’aborder ta question **sans inventer** :`,
+    `- **Clarifier** le fait central (qui, quoi, quand, où, préjudice/dommage, lien, etc.).`,
+    `- **Identifier** le régime juridique applicable (QC vs fédéral / civil vs pénal / etc.).`,
+    `- **Appliquer** une grille d’analyse (ILAC/IRAC) en laissant les références d’articles en attente tant que le corpus n’est pas disponible.`,
+
+    `\n**Ce que j’ai compris de ta question**\n${message}`,
+
+    `\n**Ce qu’il faut vérifier/ingérer pour citer correctement**\n${missing}`,
+    `\n**À ingérer en priorité (si tu veux des articles/citations précises)**\n${ingest}`,
+
+    `\nSi tu me dis : (1) la juridiction visée, (2) le contexte factuel minimal, et (3) le texte/loi que ton cours utilise, je peux reformuler un plan de réponse et les points à rechercher.`
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
-// ------------------------------
-// OpenAI — embeddings + chat
 // ------------------------------
 async function createEmbedding(input: string) {
   if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY manquant");
@@ -1249,78 +1251,59 @@ function safeJsonParse<T>(text: string): T | null {
 // ------------------------------
 // Supabase REST (service role)
 // ------------------------------
-async function supaPost(path: string, body: any) {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) throw new Error("SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant");
-  const res = await fetch(`${SUPABASE_URL}${path}`, {
-    method: "POST",
-    headers: {
-      apikey: SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-      "Content-Type": "application/json",
-      Prefer: "count=none",
-    },
-    body: JSON.stringify(body),
-  });
-  return res;
-}
-
-async function supaGet<T>(path: string): Promise<T> {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) throw new Error("SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant");
-  const url = `${SUPABASE_URL}${path}`;
-  const res = await fetch(url, {
-    method: "GET",
-    headers: {
-      apikey: SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-      "Content-Type": "application/json",
-    },
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Supabase GET ${path} failed: ${res.status} ${t}`);
-  }
-  return (await res.json()) as T;
-}
+// ------------------------------
+// Supabase access (RLS via user session)
+// ------------------------------
+// NOTE: We use createClient() (anon key + user cookies). No service_role.
+// All DB reads/writes must pass RLS policies.
+// ------------------------------
 
 // ------------------------------
 // Hybrid RPC search (FTS + vector) — RPC ONLY
 // ------------------------------
-async function callRpc<T>(rpcName: string, body: any): Promise<T[]> {
-  const rpcRes = await supaPost(`/rest/v1/rpc/${rpcName}`, body);
-  if (!rpcRes.ok) {
-    const t = await rpcRes.text().catch(() => "");
-    throw new Error(`RPC ${rpcName} failed: ${rpcRes.status} ${t}`);
-  }
-  return ((await rpcRes.json()) ?? []) as T[];
+// ------------------------------
+// Hybrid RPC search (FTS + vector) — RPC ONLY (RLS)
+// ------------------------------
+async function callRpc<T>(
+  supabase: ReturnType<typeof createClient>,
+  rpcName: string,
+  params: any
+): Promise<T[]> {
+  const { data, error } = await supabase.rpc(rpcName as any, params);
+  if (error) throw new Error(`RPC ${rpcName} failed: ${error.message}`);
+  return ((data ?? []) as unknown) as T[];
 }
 
-async function hybridSearchRPC(args: {
-  query_text: string;
-  query_embedding: number[];
-  match_count: number;
-  filter_jurisdiction_norm: string | null;
-  filter_bucket: string | null;
-}): Promise<HybridHit[]> {
+async function hybridSearchRPC(
+  supabase: ReturnType<typeof createClient>,
+  args: {
+    query_text: string;
+    query_embedding: number[];
+    match_count: number;
+    filter_jurisdiction_norm: string | null;
+    filter_bucket: string | null;
+  }
+): Promise<HybridHit[]> {
   const payload = {
-    query_embedding: args.query_embedding,
     query_text: args.query_text,
+    query_embedding: args.query_embedding,
     match_count: args.match_count,
     filter_jurisdiction_norm: args.filter_jurisdiction_norm,
     filter_bucket: args.filter_bucket,
   };
 
   try {
-    return await callRpc<HybridHit>("search_legal_vectors_hybrid_v2", payload);
-  } catch {
-    return await callRpc<HybridHit>("search_legal_vectors_hybrid_v1", payload);
+    return await callRpc<HybridHit>(supabase, "search_legal_vectors_hybrid_v2", payload);
+  } catch (e: any) {
+    // fallback v1 (older RPC)
+    return await callRpc<HybridHit>(supabase, "search_legal_vectors_hybrid_v1", payload);
   }
 }
 
 /**
  * ✅ Wrapper anti-timeout.
  */
-async function hybridSearchWithRetry(args: {
+async function hybridSearchWithRetry(supabase: ReturnType<typeof createClient>, args: {
   query_text: string;
   query_embedding: number[];
   domain: Domain;
@@ -1354,7 +1337,7 @@ async function hybridSearchWithRetry(args: {
   for (let i = 0; i < attempts.length; i++) {
     const a = attempts[i];
     try {
-    const hits = await hybridSearchRPC({
+    const hits = await hybridSearchRPC(supabase, {
       query_text,
       query_embedding,
       match_count: a.match_count,
@@ -1397,92 +1380,105 @@ function courseJurisdictionLock(profileObj: any, course_slug: string): Jurisdict
 }
 
 // ------------------------------
-// Mapping helpers (course laws)
+// ------------------------------
+// Mapping helpers (course laws) — RLS safe (no service_role)
 // ------------------------------
 function normCodeId(codeId: string | null | undefined): string {
   return String(codeId ?? "").trim().toLowerCase();
 }
 
-async function getCourseCanonicalCodes(course_slug: string): Promise<string[]> {
-  type Row = { canonical_code_id: string | null };
-  const rows = await supaGet<Row[]>(
-    `/rest/v1/course_law_requirements?course_slug=eq.${encodeURIComponent(course_slug)}&select=canonical_code_id`
-  );
-  return rows
-    .map((r) => r.canonical_code_id)
-    .filter((x): x is string => !!x && x.trim().length > 0);
+async function getCourseCanonicalCodes(
+  supabase: ReturnType<typeof createClient>,
+  course_slug: string
+): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("course_law_requirements")
+    .select("canonical_code_id")
+    .eq("course_slug", course_slug);
+
+  if (error) throw new Error(`getCourseCanonicalCodes failed: ${error.message}`);
+
+  const uniq = new Set<string>();
+  for (const r of data ?? []) {
+    const v = (r as any).canonical_code_id;
+    if (typeof v === "string" && v.trim()) uniq.add(v.trim());
+  }
+  return Array.from(uniq);
 }
 
-async function expandAliases(canonicalCodes: string[]): Promise<Set<string>> {
-  if (!canonicalCodes.length) return new Set();
-  type AliasRow = { canonical_code: string; aliases: string[] | null };
+async function expandAliases(
+  supabase: ReturnType<typeof createClient>,
+  canonicalCodes: string[]
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (const c of canonicalCodes) out.add(normCodeId(c));
 
-  // NB: Supabase REST in.(...) attend une liste de valeurs sans être double-encodée.
-  // On garde simple et tolérant.
-  const inList = canonicalCodes.map((c) => `"${c.replace(/"/g, '\\"')}"`).join(",");
+  if (!canonicalCodes.length) return out;
 
-  let rows: AliasRow[] = [];
-  try {
-    rows = await supaGet<AliasRow[]>(
-      `/rest/v1/code_aliases?canonical_code=in.(${encodeURIComponent(inList)})&select=canonical_code,aliases`
-    );
-  } catch {
-    rows = [];
+  // optional table: code_aliases(canonical_code text, aliases text[])
+  const { data, error } = await supabase
+    .from("code_aliases")
+    .select("canonical_code,aliases")
+    .in("canonical_code", canonicalCodes);
+
+  if (error) {
+    // fail-open on aliases only (keep canon)
+    return out;
   }
 
-  const s = new Set<string>();
-  for (const c of canonicalCodes) s.add(normCodeId(c));
-  for (const r of rows) {
-    s.add(normCodeId(r.canonical_code));
-    for (const a of r.aliases ?? []) s.add(normCodeId(a));
-  }
-  return s;
-}
-
-async function getIngestNeededForCourse(course_slug: string): Promise<string[]> {
-  type ReqRow = { law_key: string; canonical_code_id: string | null };
-  const reqRows = await supaGet<ReqRow[]>(
-    `/rest/v1/course_law_requirements?course_slug=eq.${encodeURIComponent(course_slug)}&select=law_key,canonical_code_id`
-  );
-  if (!reqRows.length) return [];
-
-  const lawKeys = reqRows.map((r) => r.law_key).filter(Boolean);
-  const inList = lawKeys.map((k) => `"${k.replace(/"/g, '\\"')}"`).join(",");
-
- type LR = { law_key: string; status: string | null; canonical_code_id: string | null };
-
-const lr = await supaGet<LR[]>(
-  `/rest/v1/law_registry?law_key=in.(${encodeURIComponent(inList)})&select=law_key,status,canonical_code_id`
-);
-
-const out: string[] = [];
-for (const r of lr) {
-  const st = (r.status ?? "").toLowerCase();
-  if (st !== "ingested") out.push(r.canonical_code_id ?? r.law_key);
-}
-return Array.from(new Set(out)).slice(0, 24);
-
-}
-
-async function fetchTopDistinctions(course_slug: string, limit = 8): Promise<DistinctionRow[]> {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) throw new Error("SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant");
-  const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/concept_distinctions?select=id,course_slug,concept_a,concept_b,rule_of_thumb,pitfalls,when_it_matters,priority&course_slug=eq.${encodeURIComponent(
-      course_slug
-    )}&order=priority.desc&limit=${limit}`,
-    {
-      headers: {
-        apikey: SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-      },
+  for (const row of data ?? []) {
+    const c = (row as any).canonical_code;
+    if (typeof c === "string" && c.trim()) out.add(normCodeId(c));
+    const aliases = (row as any).aliases;
+    if (Array.isArray(aliases)) {
+      for (const a of aliases) {
+        if (typeof a === "string" && a.trim()) out.add(normCodeId(a));
+      }
     }
-  );
-
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`fetchTopDistinctions failed: ${res.status} ${t}`);
   }
-  return (await res.json()) as DistinctionRow[];
+
+  return out;
+}
+
+async function getIngestNeededForCourse(
+  supabase: ReturnType<typeof createClient>,
+  course_slug: string
+): Promise<string[]> {
+  // returns a short list of laws/ids that are required/recommended but not ingested (best-effort)
+  const { data, error } = await supabase
+    .from("course_law_requirements")
+    .select("law_key,canonical_code_id,status")
+    .eq("course_slug", course_slug);
+
+  if (error) return [];
+
+  const needed = new Set<string>();
+  for (const r of data ?? []) {
+    const status = String((r as any).status ?? "").toLowerCase().trim();
+    if (status && status !== "ingested") {
+      const c = (r as any).canonical_code_id;
+      const k = (r as any).law_key;
+      const v = (typeof c === "string" && c.trim()) ? c.trim() : (typeof k === "string" && k.trim() ? k.trim() : null);
+      if (v) needed.add(v);
+    }
+  }
+  return Array.from(needed).slice(0, 24);
+}
+
+async function fetchTopDistinctions(
+  supabase: ReturnType<typeof createClient>,
+  course_slug: string,
+  limit = 8
+): Promise<DistinctionRow[]> {
+  const { data, error } = await supabase
+    .from("concept_distinctions")
+    .select("id,course_slug,concept_a,concept_b,rule_of_thumb,pitfalls,when_it_matters,priority")
+    .eq("course_slug", course_slug)
+    .order("priority", { ascending: false })
+    .limit(limit);
+
+  if (error) return [];
+  return (data ?? []) as any;
 }
 
 // ------------------------------
@@ -1708,8 +1704,8 @@ function ensureMinLength(answer: string, args: { message: string; gmode: string 
   const ilac = parsed.ilac;
   if (!ilac) {
     return [
-      `**Juridiction applicable (selon le système) : ${parsed.jurisdiction ?? "Inconnue"}**`,
-      parsed.domain ? `**Domaine : ${parsed.domain}**` : "",
+      // (interne) juridiction/domaine gardés dans logs/usage uniquement
+      "",
       serverWarning || parsed.warning ? `\n\n⚠️ ${serverWarning || parsed.warning}\n` : "",
       missingBlock,
       ingestBlock,
@@ -1739,8 +1735,8 @@ function ensureMinLength(answer: string, args: { message: string; gmode: string 
   const warn = serverWarning || parsed.warning ? `\n\n⚠️ ${serverWarning || parsed.warning}\n` : "";
 
   return [
-    `**Juridiction applicable (selon le système) : ${parsed.jurisdiction ?? "Inconnue"}**`,
-    parsed.domain ? `**Domaine : ${parsed.domain}**` : "",
+    // (interne) juridiction/domaine gardés dans logs/usage uniquement
+    "",
     warn,
     partialBlock,
     `**Problème**\n${ilac.probleme}`,
@@ -1885,22 +1881,73 @@ const toHybridHitFromCodeChunk = (row: any): HybridHit => {
 
 const directArticleLookup = async (
   message: string,
-  supaGet: <T,>(path: string) => Promise<T>
+  supabase: ReturnType<typeof createClient>
 ) => {
-  const re = /(art(?:icle)?\.?\s*)?(\d{3,5})\s*(c\.?c\.?q|ccq|c\.c\.q|l\.?p\.?c|lpc)/i;
+  // ex: "1457 C.c.Q.", "art. 1457 CCQ", "article 58 LPC"
+  const re = /(art(?:icle)?\.?\s*)?(\d{1,6}(?:\.\d+)*)\s*(c\.?c\.?q|ccq|c\.c\.q|l\.?p\.?c|lpc)/i;
   const match = message.match(re);
   if (!match) return [];
 
   const art = match[2];
-  const code = match[3].toLowerCase().includes("lpc") ? "LPC" : "CCQ";
+  const raw = match[3].toLowerCase();
 
-  const rows = await supaGet<any[]>(
-    `/code_chunks?select=id,citation,content,code_id,jur&code_id=eq.${code}&citation=ilike.${encodeURIComponent(
-      `%${art}%`
-    )}&limit=6`
-  ).catch(() => []);
+  const codeCandidates =
+    raw.includes("lpc")
+      ? ["L.P.C.", "LPC", "L.p.c.", "l.p.c."]
+      : ["C.c.Q.", "CCQ", "C.C.Q.", "c.c.q."];
 
-  return rows ?? [];
+  // 1) Prefer legal_vectors (same corpus as hybrid search RPC)
+  try {
+    // try exact article_num if the column exists
+    let { data, error } = await supabase
+      .from("legal_vectors")
+      .select("*")
+      .in("code_id", codeCandidates as any)
+      .eq("article_num", art as any)
+      .limit(8);
+
+    if (error) {
+      // fallback: citation contains the article number
+      const r2 = await supabase
+        .from("legal_vectors")
+        .select("*")
+        .in("code_id", codeCandidates as any)
+        .ilike("citation", `%${art}%`)
+        .limit(8);
+
+      data = r2.data as any;
+      error = r2.error as any;
+    }
+
+    if (!error && Array.isArray(data)) {
+      return data.map((row: any) =>
+        toHybridHitFromCodeChunk({
+          ...row,
+          jur: row?.jur ?? row?.jurisdiction_norm ?? row?.jurisdiction ?? "UNKNOWN",
+          content: row?.content ?? row?.text ?? row?.chunk ?? row?.body ?? null,
+        })
+      );
+    }
+  } catch {
+    // ignore and fallback to legacy table
+  }
+
+  // 2) Legacy fallback: code_chunks (if still present)
+  try {
+    const legacyCode = raw.includes("lpc") ? "LPC" : "CCQ";
+    const { data, error } = await supabase
+      .from("code_chunks")
+      .select("id,citation,content,code_id,jur")
+      .eq("code_id", legacyCode)
+      .ilike("citation", `%${art}%`)
+      .limit(8);
+
+    if (!error && Array.isArray(data)) return data.map(toHybridHitFromCodeChunk);
+  } catch {
+    // ignore
+  }
+
+  return [];
 };
 
 // ------------------------------
@@ -1920,8 +1967,6 @@ export async function POST(req: Request) {
 
   try {
     if (!OPENAI_API_KEY) return json({ error: "OPENAI_API_KEY manquant" }, 500);
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return json({ error: "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant" }, 500);
-
     const body = (await req.json().catch(() => ({}))) as ChatRequest;
 
     let message =
@@ -1972,6 +2017,53 @@ export async function POST(req: Request) {
     let expanded = expandedQuery;
     const wants_exam_tip = intent.wants_exam_tip;
 // ------------------------------
+// Supabase mini-GET helper (RLS, used by senseRouter only)
+// ------------------------------
+const supaGet = async <T,>(path: string): Promise<T> => {
+  // Supported endpoints (restricted on purpose):
+  // - /rest/v1/legal_senses?... (term eq)
+  // - /rest/v1/legal_sense_triggers?... (sense_id in)
+  if (path.startsWith("/rest/v1/legal_senses")) {
+    const qs = path.split("?")[1] ?? "";
+    const params = new URLSearchParams(qs);
+    const termEq = params.get("term");
+    const term = termEq?.startsWith("eq.") ? decodeURIComponent(termEq.slice(3)) : null;
+    const sel = params.get("select") ?? "id,term,domain,jurisdiction_hint,description,canonical_query,course_slugs";
+
+    let q = supabaseAuth.from("legal_senses").select(sel);
+    if (term) q = q.eq("term", term);
+    const { data, error } = await q;
+    if (error) throw new Error(`legal_senses select failed: ${error.message}`);
+    return (data ?? []) as any;
+  }
+
+  if (path.startsWith("/rest/v1/legal_sense_triggers")) {
+    const qs = path.split("?")[1] ?? "";
+    const params = new URLSearchParams(qs);
+    const senseIn = params.get("sense_id") ?? "";
+    const sel = params.get("select") ?? "sense_id,type,pattern,weight";
+    const m = senseIn.match(/^in\.\((.*)\)$/);
+    const rawList = m?.[1] ?? "";
+    const ids = rawList
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .map((x) => x.replace(/^"|"$/g, "")); // unquote if any
+
+    const { data, error } = await supabaseAuth
+      .from("legal_sense_triggers")
+      .select(sel)
+      .in("sense_id", ids as any);
+
+    if (error) throw new Error(`legal_sense_triggers select failed: ${error.message}`);
+    return (data ?? []) as any;
+  }
+
+  throw new Error(`Unsupported supaGet path: ${path}`);
+};
+
+
+// ------------------------------
 // Sense-Aware Router (polysémie → override domain/jurisdiction/expanded)
 // ------------------------------
 let sense: Awaited<ReturnType<typeof senseRouter>> | null = null;
@@ -1985,7 +2077,7 @@ try {
   supaGet,                // ✅ PAS de wrapper custom
   createEmbedding,
   microRetrieve: async (query_text, query_embedding) => {
-    const r = await hybridSearchWithRetry({
+    const r = await hybridSearchWithRetry(supabaseAuth, {
       query_text,
       query_embedding,
       domain: "Inconnu",
@@ -2067,7 +2159,7 @@ const jurisdiction_expected = gate.selected;
 
     try {
       if (allowKernels && course_slug) {
-        kernelHits = await callRpc<KernelHit>("search_course_kernels", {
+        kernelHits = await callRpc<KernelHit>(supabaseAuth, "search_course_kernels", {
           query_embedding: queryEmbedding,
           p_course_slug: course_slug,
           match_count: 6,
@@ -2096,7 +2188,7 @@ const jurisdiction_expected = gate.selected;
     let hybridError: string | null = null;
     
     {
-      const r = await hybridSearchWithRetry({
+      const r = await hybridSearchWithRetry(supabaseAuth, {
         query_text: expanded,              // ✅ FIX
         query_embedding: queryEmbedding,
         domain: domain_detected,
@@ -2110,7 +2202,7 @@ const jurisdiction_expected = gate.selected;
       if (hybridError) console.warn("hybridSearchWithRetry failed:", hybridError);
     }
 
-  const directRows = await directArticleLookup(message, supaGet);
+  const directRows = await directArticleLookup(message, supabaseAuth);
 
 if (directRows.length) {
   const directHits = directRows.map(toHybridHitFromCodeChunk);
@@ -2126,35 +2218,25 @@ if (directRows.length) {
     let _allowedCodeIds: Set<string> | null = null;
     let _ingestNeeded: string[] = [];
     try {
-      if (course_slug) {
-        const canon = await getCourseCanonicalCodes(course_slug);
-        _allowedCodeIds = await expandAliases(canon);
-        _ingestNeeded = await getIngestNeededForCourse(course_slug);
+      if (course_slug && course_slug !== "general") {
+        const canon = await getCourseCanonicalCodes(supabaseAuth, course_slug);
+        _allowedCodeIds = await expandAliases(supabaseAuth, canon);
+        _ingestNeeded = await getIngestNeededForCourse(supabaseAuth, course_slug);
       }
     } catch (e: any) {
       console.warn("course mapping fetch failed:", e?.message ?? e);
     }
-
-    let strictLiteUsed = false;
-
 if (_allowedCodeIds && _allowedCodeIds.size) {
   const filtered = (hybridHits ?? []).filter((h) => _allowedCodeIds!.has(normCodeId(h.code_id)));
-
-  if (filtered.length) {
-    hybridHits = filtered;          // ✅ strict OK
-  } else if ((hybridHits ?? []).length) {
-    strictLiteUsed = true;          // ✅ strict-lite fallback
-    // on garde hybridHits tel quel (sinon UX “aucune source”)
-  }
+  hybridHits = filtered; // strict only (no fallback)
 }
-
 
     // ------------------------------
     // Distinctions (internal)
     // ------------------------------
     let distinctions: DistinctionRow[] = [];
     try {
-      if (course_slug) distinctions = await fetchTopDistinctions(course_slug, 8);
+      if (course_slug) distinctions = await fetchTopDistinctions(supabaseAuth, course_slug, 8);
     } catch (e: any) {
       console.warn("distinctions fetch failed:", e?.message ?? e);
     }
@@ -2397,8 +2479,9 @@ ${pits || "- (none)"}`;
         ingest_needed: cov.ingest_needed,
       });
 
-      await supaPost("/rest/v1/logs", {
-        question: message,
+      try {
+  const { error: logError } = await supabaseAuth.from("logs").insert({
+    question: message,
         profile_slug: profile ?? null,
         course_slug,
         user_goal,
@@ -2433,8 +2516,13 @@ ${pits || "- (none)"}`;
           distinctions_count: distinctions.length,
           debugPasses,
         },
-        user_id: user.id,
-      }).catch((e) => console.warn("log insert failed:", e));
+  });
+
+  if (logError) console.warn("log insert failed:", logError);
+} catch (e) {
+  console.warn("log insert failed:", e);
+}
+
 
     const clientPayload =
   mode === "prod"
@@ -2577,28 +2665,30 @@ RÈGLES:
         ingest_needed: cov.ingest_needed,
       });
 
-      await supaPost("/rest/v1/logs", {
-        question: message,
+     try {
+  const { error: logError } = await supabaseAuth.from("logs").insert({
+    question: message,
         profile_slug: profile ?? null,
         course_slug,
         user_goal,
         institution_name,
         risk_flags,
-        top_ids: finalRows.map((r) => r.id),
+        top_ids: [],
         response: {
           answer,
-          sources,
+          sources: [],
           qa: {
             domain_detected,
             jurisdiction_expected,
             jurisdiction_selected,
             jurisdiction_lock: gate.lock,
-            rag_quality,
-            relevance_ok,
-            coverage_ok,
-            missing_coverage: cov.missing_coverage ?? [],
-            article_confidence,
-            refused_reason: "json_parse_failed_fallback_answer",
+            pitfall_keyword: gate.pitfall_keyword ?? null,
+            rag_quality: 0,
+            relevance_ok: false,
+            coverage_ok: false,
+            missing_coverage: cov.missing_coverage ?? ["Aucune source pertinente."],
+            article_confidence: 0,
+            refused_reason: null,
             hybrid_error: hybridError,
           },
         },
@@ -2610,11 +2700,14 @@ RÈGLES:
           goal_mode: gmode,
           kernels_count: kernelHits.length,
           distinctions_count: distinctions.length,
-          openai_usage: completion.usage ?? null,
           debugPasses,
         },
-        user_id: user.id,
-      }).catch((e) => console.warn("log insert failed:", e));
+  });
+
+  if (logError) console.warn("log insert failed:", logError);
+} catch (e) {
+  console.warn("log insert failed:", e);
+}
 
       return json({
         answer,
@@ -2747,48 +2840,49 @@ RÈGLES:
     // ------------------------------
     // Logging QA
     // ------------------------------
-    await supaPost("/rest/v1/logs", {
-      question: message,
-      profile_slug: profile ?? null,
-      course_slug,
-      user_goal,
-      institution_name,
-      risk_flags,
-      top_ids: finalRows.map((r) => r.id),
-      response: {
-        answer,
-        sources,
-        bad_source_ids: bad_source_ids.length ? bad_source_ids : null,
-        qa: {
-          domain_detected,
-          jurisdiction_expected,
-          jurisdiction_selected,
-          jurisdiction_lock: gate.lock,
-          pitfall_keyword: gate.pitfall_keyword ?? null,
-          rag_quality,
-          relevance_ok,
-          coverage_ok,
-          missing_coverage: parsed.missing_coverage ?? cov.missing_coverage ?? [],
-          had_qc_source,
-          article_confidence,
-          refused_reason: null,
-          hybrid_error: hybridError,
-          redactions_count: redactions.length,
+     try {
+  const { error: logError } = await supabaseAuth.from("logs").insert({
+    question: message,
+        profile_slug: profile ?? null,
+        course_slug,
+        user_goal,
+        institution_name,
+        risk_flags,
+        top_ids: [],
+        response: {
+          answer,
+          sources: [],
+          qa: {
+            domain_detected,
+            jurisdiction_expected,
+            jurisdiction_selected,
+            jurisdiction_lock: gate.lock,
+            pitfall_keyword: gate.pitfall_keyword ?? null,
+            rag_quality: 0,
+            relevance_ok: false,
+            coverage_ok: false,
+            missing_coverage: cov.missing_coverage ?? ["Aucune source pertinente."],
+            article_confidence: 0,
+            refused_reason: null,
+            hybrid_error: hybridError,
+          },
         },
-      },
-      usage: {
-        mode,
-        top_k,
-        latency_ms: Date.now() - startedAt,
-        type: "answer",
-        goal_mode: gmode,
-        kernels_count: kernelHits.length,
-        distinctions_count: distinctions.length,
-        debugPasses,
-        openai_usage: completion.usage ?? null,
-      },
-      user_id: user.id,
-    }).catch((e) => console.warn("log insert failed:", e));
+        usage: {
+          mode,
+          top_k,
+          latency_ms: Date.now() - startedAt,
+          type: "answer",
+          goal_mode: gmode,
+          kernels_count: kernelHits.length,
+          distinctions_count: distinctions.length,
+          debugPasses,
+        },
+  });
+
+  if (logError) console.warn("log insert failed:", logError);
+} catch (e) {
+  console.warn("log insert failed:", e);
+}
 
    const followups = Array.isArray(parsed.followups) ? parsed.followups.slice(0, 3) : [];
 
