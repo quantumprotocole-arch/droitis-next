@@ -1514,6 +1514,11 @@ RÈGLES DE STYLE (réponse visible):
 - Ajoute followups: 3 propositions max (“Si tu veux, je peux…”).
 - Les sources: cite uniquement via source_ids_used; n’invente jamais.
 
+EXIGENCE DE PROFONDEUR:
+  - Si la question vise un article précis et qu'au moins 1 source existe: tu dois EXPLIQUER le contenu concret de l'article (paraphrase) + détailler les critères + illustrer.
+  - Interdit de répondre par une seule phrase de synthèse.
+  - answer_markdown doit contenir au minimum: "Idée centrale", "Ce qu’il faut prouver", "Mini-exemple", "Pièges fréquents".
+
 
 PHASE 4B — RÉPONSE GRADUÉE
 - Le refus total doit être rare.
@@ -1953,6 +1958,43 @@ function detectExplicitArticleRef(message: string): { code_id: string; article: 
   return { code_id, article };
 }
 
+function ensureMinLength(answer: string, args: { message: string; gmode?: string }) {
+  const gmode = args.gmode ?? "comprendre";
+  const min = gmode === "comprendre" ? 1200 : gmode === "examen" ? 900 : 700; // caractères
+
+  const base = (answer ?? "").trim();
+  if (base.length >= min) return base;
+
+  // Expansion déterministe (pas de nouveau retrieval, pas de nouvelles citations)
+  // Objectif: rendre la réponse réellement pédagogique même avec 1 seule source.
+  return [
+    base,
+    "",
+    "### Idée centrale (en mots simples)",
+    "- Reformule l’article comme une règle pratique : **qui doit faire quoi, et dans quelles conditions**.",
+    "",
+    "### Ce qu’il faut prouver (checklist)",
+    "- **Fait déclencheur** : quel comportement ou omission est reproché ?",
+    "- **Faute / manquement** : en quoi le comportement s’écarte-t-il de ce qu’on attend ?",
+    "- **Dommage** : quel préjudice concret est invoqué ?",
+    "- **Lien causal** : pourquoi ce dommage découle-t-il de ce comportement ?",
+    "",
+    "### Mini-exemple guidé",
+    "1) Décris une situation simple (2–3 phrases).",
+    "2) Applique la checklist ci-dessus point par point.",
+    "3) Conclus: responsabilité probable ou non, et pourquoi.",
+    "",
+    "### Pièges fréquents",
+    "- Confondre **dommage** (conséquence) et **faute** (comportement).",
+    "- Oublier le **lien causal** (même s’il y a faute + dommage).",
+    "- Rester vague: il faut des faits concrets pour appliquer la règle.",
+    "",
+    "### Pour aller plus loin (3 questions)",
+    "- Quels faits précis pourrais-tu me donner (chronologie, acteurs, dommages) pour appliquer l’article à TON cas ?",
+    "- Est-ce une situation plutôt **contractuelle** ou **extra-contractuelle** (ou mixte) ?",
+    "- Quel type de dommage (matériel, corporel, moral) est allégué et comment il est démontré ?",
+  ].join("\n");
+}
 
 // ------------------------------
 // POST
@@ -2606,6 +2648,8 @@ return json(clientPayload);
         .map((s) => `SOURCE id=${s.id}\nCitation: ${s.citation}\nJuridiction: ${s.jur}\nURL: ${s.url ?? ""}\nExtrait:\n${s.snippet ?? ""}`)
         .join("\n---\n") || "(aucun extrait)";
 const cp = courseContext(profileObj);
+const explicitArticleAsked =
+  /(art(?:icle)?\.?\s*)?\d{1,6}(?:\.\d+)*\s*(c\.?c\.?q|ccq|c\.c\.q|l\.?p\.?c|lpc)/i.test(message);
 
     // ------------------------------
     // Model payload
@@ -2616,6 +2660,13 @@ const cp = courseContext(profileObj);
       `Juridiction attendue (heuristique): ${jurisdiction_expected}`,
       `Juridiction sélectionnée (système): ${jurisdiction_selected}`,
       `Juridiction verrouillée (lock): ${gate.lock}`,
+      explicitArticleAsked
+  ? "- IMPORTANT: l’utilisateur a cité un article précis. Ta réponse doit expliquer l’article en profondeur: (1) paraphrase simple, (2) éléments/conditions à prouver, (3) mini-exemple guidé, (4) erreurs fréquentes, (5) 3 questions de suivi."
+  : "",
+      explicitArticleAsked
+  ? "- Ton answer_markdown doit faire au moins ~8–12 paragraphes courts (pas une seule phrase)."
+  : "",
+
       kernelsWarning ? `KERNELS_WARNING: ${kernelsWarning}` : "",
       "Course kernels (guides pédagogiques internes; NON des sources de droit; NE PAS les citer):",
       kernelContext,
@@ -2645,10 +2696,13 @@ const cp = courseContext(profileObj);
       "- Réponse graduée: si sources limitées, continue et remplis missing_coverage[] + ingest_needed[] (si utile).",
       "- Ne mentionne aucun article/arrêt/lien/test précis hors allowlist.",
       "- No-block: si un fait manque, applique l’hypothèse commune et mentionne-la.",
+      
       kernelHits.length ? "- Priorité: si des course kernels sont fournis, utilise-les comme structure (plan/étapes/pièges) et adapte aux faits." : "",
       kernelHits.length ? "- OBLIGATION: commence l'Application par un mini 'Plan d'examen' en 3–6 puces (basé kernels)." : "",
       distinctions.length ? "- Si une distinction pertinente est fournie, intègre explicitement 1–2 pitfalls dans l'Application." : "",
+      
       "",
+      
       "INSTRUCTIONS DE SORTIE (JSON strict, uniquement):",
       `{
   "type": "answer" | "clarify" | "refuse",
@@ -2867,6 +2921,11 @@ RÈGLES:
     examTip,
     mode: mode === "prod" ? "prod" : "dev",
 });
+// ✅ Force une réponse plus longue en prod (sans inventer de sources)
+if (mode === "prod") {
+  answer = ensureMinLength(answer, { message, gmode });
+}
+
 
 
 
