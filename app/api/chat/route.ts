@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { senseRouter } from "@/lib/senseRouter";
 import { getCourseProfile, expandQueryWithProfile, courseContext } from "@/lib/courseProfiles";
 
 
@@ -554,6 +555,16 @@ function detectJurisdictionExpected(
   if (domain === "Civil") return { selected: "QC", reason: "civil_default_qc_majority", lock: false };
 
   return { selected: defaultJurisdictionByDomain(domain), reason: "domain_default_majority", lock: false };
+}
+function makeGate(args?: Partial<Gate>): Gate {
+  return {
+    selected: "UNKNOWN",
+    reason: "gate_default",
+    lock: false,
+    pitfall_keyword: null,
+    assumptions: { union_assumed: false, penal_provincial_assumed: false },
+    ...(args ?? {}),
+  };
 }
 
 function jurisdictionGateNoBlock(message: string, domain: Domain): Gate {
@@ -1808,6 +1819,67 @@ function bestFallbackSourceIds(args: { sources: Source[]; domain: Domain; jurisd
   const ranked = [...sources].sort((a, b) => score(b) - score(a));
   return ranked.slice(0, Math.min(2, ranked.length)).map((x) => x.id);
 }
+// ✅ TOP-LEVEL helpers (pas dans POST)
+
+const extractArticleNum = (citation?: string | null): string | null => {
+  if (!citation) return null;
+  const m =
+    citation.match(/\b(?:art(?:icle)?\.?\s*)?(\d{1,6}(?:\.\d+)*)\b/i) ||
+    citation.match(/\b(\d{3,5}(?:\.\d+)*)\b/);
+  return m ? m[1] : null;
+};
+
+const toHybridHitFromCodeChunk = (row: any): HybridHit => {
+  const jur = String(row?.jur ?? "UNKNOWN").toUpperCase();
+  const citation = (row?.citation ?? null) as string | null;
+  const text = (row?.content ?? row?.text ?? null) as string | null;
+  const codeIdRaw = row?.code_id ?? null;
+
+  const enriched: any = {
+    title: citation ?? row?.title ?? "Référence (corpus)",
+    text: text ?? "",
+    code_id_struct: row?.code_id_struct ?? { raw: codeIdRaw },
+    article_num: row?.article_num ?? extractArticleNum(citation),
+    url_struct: row?.url_struct ?? null,
+  };
+
+  const hybrid: any = {
+    id: row.id,
+    citation,
+    code_id: codeIdRaw,
+    jurisdiction_norm: jur,
+    content: text,
+    snippet: text ? String(text).slice(0, 520) : null,
+    rrf_score: 0,
+    score: 0,
+    from_fts: false,
+    fts_rank: 0,
+    similarity: null,
+    distance: null,
+  };
+
+  return { ...enriched, ...hybrid } as HybridHit;
+};
+
+const directArticleLookup = async (
+  message: string,
+  supaGet: <T,>(path: string) => Promise<T>
+) => {
+  const re = /(art(?:icle)?\.?\s*)?(\d{3,5})\s*(c\.?c\.?q|ccq|c\.c\.q|l\.?p\.?c|lpc)/i;
+  const match = message.match(re);
+  if (!match) return [];
+
+  const art = match[2];
+  const code = match[3].toLowerCase().includes("lpc") ? "LPC" : "CCQ";
+
+  const rows = await supaGet<any[]>(
+    `/code_chunks?select=id,citation,content,code_id,jur&code_id=eq.${code}&citation=ilike.${encodeURIComponent(
+      `%${art}%`
+    )}&limit=6`
+  ).catch(() => []);
+
+  return rows ?? [];
+};
 
 // ------------------------------
 // POST
@@ -1875,7 +1947,52 @@ export async function POST(req: Request) {
     const profileObj = getCourseProfile(course_slug) ?? getCourseProfile("general");
     const { expanded: expandedQuery } = expandQueryWithProfile(message, profileObj);
     const gmode = intent.goal_mode;
+    let expanded = expandedQuery;
     const wants_exam_tip = intent.wants_exam_tip;
+// ------------------------------
+// Sense-Aware Router (polysémie → override domain/jurisdiction/expanded)
+// ------------------------------
+let sense: Awaited<ReturnType<typeof senseRouter>> | null = null;
+
+try {
+  sense = await senseRouter({
+  message,
+  course_slug,
+  expandedQuery: expanded,
+  goal_mode: gmode,
+  supaGet,                // ✅ PAS de wrapper custom
+  createEmbedding,
+  microRetrieve: async (query_text, query_embedding) => {
+    const r = await hybridSearchWithRetry({
+      query_text,
+      query_embedding,
+      domain: "Inconnu",
+      gate,
+      jurisdiction_expected,
+      goal_mode: "learn",
+    });
+    return { hits: r.hits ?? [] };
+  },
+});
+
+  if (sense?.should_clarify && sense.clarify_question) {
+    // IMPORTANT: en prod tu peux renvoyer "answer" = question de clarification
+    // ou un type "clarify" si ton front le gère.
+    return json(
+      {
+        answer: sense.clarify_question,
+        sources: [],
+        ...(mode !== "prod" ? { usage: { type: "clarify", sense_debug: sense.debug } } : {}),
+      },
+      200
+    );
+  }
+
+  if (sense?.expandedQuery_override) expanded = sense.expandedQuery_override;
+} catch (e: any) {
+  // fail-open: on continue sans router
+  if (mode !== "prod") console.warn("senseRouter error:", e?.message ?? e);
+}
 
     // ------------------------------
     // Domain + Jurisdiction
@@ -1915,7 +2032,7 @@ const jurisdiction_expected = gate.selected;
     // ------------------------------
     // Embedding + hybrid retrieval
     // ------------------------------
-    const queryEmbedding = await createEmbedding(expandedQuery);
+    const queryEmbedding = await createEmbedding(expanded);
     if (!queryEmbedding) return json({ error: "Échec embedding" }, 500);
 
     // ------------------------------
@@ -1945,8 +2062,8 @@ const jurisdiction_expected = gate.selected;
             .join("\n---\n")
         : "(aucun kernel)";
 
-    const baseKeywords = extractKeywords(expandedQuery, 10);
-    const { keywords } = expandQuery(expandedQuery, baseKeywords, jurisdiction_expected, gate.assumptions.union_assumed);
+    const baseKeywords = extractKeywords(expanded, 10);
+    const { keywords } = expandQuery(expanded, baseKeywords, jurisdiction_expected, gate.assumptions.union_assumed);
 
     const article = detectArticleMention(message);
 
@@ -1958,7 +2075,7 @@ const jurisdiction_expected = gate.selected;
     
     {
       const r = await hybridSearchWithRetry({
-        query_text: expandedQuery,              // ✅ FIX
+        query_text: expanded,              // ✅ FIX
         query_embedding: queryEmbedding,
         domain: domain_detected,
         gate,
@@ -1970,6 +2087,16 @@ const jurisdiction_expected = gate.selected;
       hybridError = r.hybridError;
       if (hybridError) console.warn("hybridSearchWithRetry failed:", hybridError);
     }
+
+  const directRows = await directArticleLookup(message, supaGet);
+
+if (directRows.length) {
+  const directHits = directRows.map(toHybridHitFromCodeChunk);
+  hybridHits = [...directHits, ...(hybridHits ?? [])];
+}
+
+
+
 
     // ------------------------------
     // Course law mapping: restrict sources to required codes (fallback if empty)
@@ -2109,6 +2236,7 @@ ${pits || "- (none)"}`;
     }
 
     const global = [...candidates].sort((a, b) => b.composite - a.composite);
+
 
     // ------------------------------
     // First pass selection (raw)
