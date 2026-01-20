@@ -1884,47 +1884,37 @@ const directArticleLookup = async (
   supabase: ReturnType<typeof createClient>
 ) => {
   // ex: "1457 C.c.Q.", "art. 1457 CCQ", "article 58 LPC"
-  const re = /(art(?:icle)?\.?\s*)?(\d{1,6}(?:\.\d+)*)\s*(c\.?c\.?q|ccq|c\.c\.q|l\.?p\.?c|lpc)/i;
+  const re =
+    /(art(?:icle)?\.?\s*)?(\d{1,6}(?:\.\d+)*)\s*(c\.?c\.?q|ccq|c\.c\.q|l\.?p\.?c|lpc)/i;
   const match = message.match(re);
   if (!match) return [];
 
   const art = match[2];
   const raw = match[3].toLowerCase();
 
-  const codeCandidates =
-    raw.includes("lpc")
-      ? ["L.P.C.", "LPC", "L.p.c.", "l.p.c."]
-      : ["C.c.Q.", "CCQ", "C.C.Q.", "c.c.q."];
+  const codeCandidates = raw.includes("lpc")
+    ? ["L.P.C.", "LPC", "L.p.c.", "l.p.c."]
+    : ["C.c.Q.", "CCQ", "C.C.Q.", "c.c.q."];
 
-  // 1) Prefer legal_vectors (same corpus as hybrid search RPC)
+  // 1) Prefer legal_vectors (same corpus as hybrid search)
   try {
-    // try exact article_num if the column exists
-    let { data, error } = await supabase
+    const like = `%${art}%`;
+
+    const { data, error } = await supabase
       .from("legal_vectors")
-      .select("*")
+      .select("id,code_id,jurisdiction,jurisdiction_bucket,citation,title,text")
       .in("code_id", codeCandidates as any)
-      .eq("article_num", art as any)
-      .limit(8);
+      // IMPORTANT: pas de article_num (n’existe pas chez toi)
+      .or(`citation.ilike.${like},text.ilike.${like}`)
+      .limit(12);
 
-    if (error) {
-      // fallback: citation contains the article number
-      const r2 = await supabase
-        .from("legal_vectors")
-        .select("*")
-        .in("code_id", codeCandidates as any)
-        .ilike("citation", `%${art}%`)
-        .limit(8);
-
-      data = r2.data as any;
-      error = r2.error as any;
-    }
-
-    if (!error && Array.isArray(data)) {
+    if (!error && Array.isArray(data) && data.length) {
       return data.map((row: any) =>
         toHybridHitFromCodeChunk({
           ...row,
-          jur: row?.jur ?? row?.jurisdiction_norm ?? row?.jurisdiction ?? "UNKNOWN",
-          content: row?.content ?? row?.text ?? row?.chunk ?? row?.body ?? null,
+          // toHybridHitFromCodeChunk attend des champs type "jur" + "content"
+          jur: row?.jurisdiction ?? row?.jurisdiction_bucket ?? "UNKNOWN",
+          content: row?.text ?? null,
         })
       );
     }
@@ -1942,13 +1932,27 @@ const directArticleLookup = async (
       .ilike("citation", `%${art}%`)
       .limit(8);
 
-    if (!error && Array.isArray(data)) return data.map(toHybridHitFromCodeChunk);
+    if (!error && Array.isArray(data) && data.length) return data.map(toHybridHitFromCodeChunk);
   } catch {
     // ignore
   }
 
   return [];
 };
+
+
+
+function detectExplicitArticleRef(message: string): { code_id: string; article: string } | null {
+  const re = /(art(?:icle)?\.?\s*)?(\d{1,6}(?:\.\d+)*)\s*(c\.?c\.?q|ccq|c\.c\.q|l\.?p\.?c|lpc)/i;
+  const m = message.match(re);
+  if (!m) return null;
+
+  const article = m[2];
+  const raw = m[3].toLowerCase();
+  const code_id = raw.includes("lpc") ? "L.P.C." : "C.c.Q.";
+  return { code_id, article };
+}
+
 
 // ------------------------------
 // POST
@@ -2202,12 +2206,41 @@ const jurisdiction_expected = gate.selected;
       if (hybridError) console.warn("hybridSearchWithRetry failed:", hybridError);
     }
 
-  const directRows = await directArticleLookup(message, supabaseAuth);
+  // --- Reference lock (article explicite) ---
+// Si l’utilisateur demande explicitement "1457 C.c.Q." / "58 L.P.C." :
+// - si on trouve l’article : on répond UNIQUEMENT avec ces sources
+// - si on ne le trouve pas : on force sources=[] (pas de bruit genre "Loi sur les impôts")
+const detectExplicitArticleRef = (msg: string): { code: "CCQ" | "LPC"; article: string } | null => {
+  const re = /(art(?:icle)?\.?\s*)?(\d{1,6}(?:\.\d+)*)\s*(c\.?c\.?q|ccq|c\.c\.q|l\.?p\.?c|lpc)/i;
+  const m = msg.match(re);
+  if (!m) return null;
+  const article = m[2];
+  const raw = (m[3] || "").toLowerCase();
+  const code = raw.includes("lpc") ? "LPC" : "CCQ";
+  return { code, article };
+};
 
-if (directRows.length) {
-  const directHits = directRows.map(toHybridHitFromCodeChunk);
-  hybridHits = [...directHits, ...(hybridHits ?? [])];
+const explicitRef = detectExplicitArticleRef(message);
+const hasExplicitRef = /(art(?:icle)?\.?\s*)?\d{1,6}(?:\.\d+)*\s*(c\.?c\.?q|ccq|c\.c\.q|l\.?p\.?c|lpc)/i.test(
+  message
+);
+
+const directRows = await directArticleLookup(message, supabaseAuth);
+
+if (hasExplicitRef) {
+  if (directRows.length) {
+    // ✅ article explicitement demandé et trouvé => on verrouille sur lui
+    hybridHits = directRows;
+  } else {
+    // ✅ article explicitement demandé mais absent => aucune source (pas de bruit fiscal)
+    hybridHits = [];
+  }
+} else if (directRows.length) {
+  // pas de ref explicite => on enrichit comme avant
+  hybridHits = [...directRows, ...(hybridHits ?? [])];
 }
+
+
 
 
 
