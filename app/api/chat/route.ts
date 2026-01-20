@@ -1236,6 +1236,46 @@ async function createChatCompletion(messages: Array<{ role: "system" | "user" | 
     usage: data.usage ?? null,
   };
 }
+async function expandAnswerIfTooShort(args: {
+  mode: string;
+  explicitArticleAsked: boolean;
+  answer: string;
+  minChars: number;
+  userPayloadText: string;
+  allowed_citations: string[];
+  allowed_source_ids: string[];
+  openaiCall: (payload: { system: string; user: string }) => Promise<string>; // adapte à ton wrapper
+}): Promise<string> {
+  if (args.mode !== "prod") return args.answer;
+  if (!args.explicitArticleAsked) return args.answer;
+  if ((args.answer ?? "").trim().length >= args.minChars) return args.answer;
+
+  // Prompt de réécriture: même sources, même contraintes
+  const rewriteUser = [
+    "Tu dois RÉÉCRIRE la réponse en version longue, pédagogique, et spécifique à l’article demandé.",
+    "Contraintes:",
+    "- Interdit d’inventer une règle, exception, nuance, ou référence non présente dans les extraits.",
+    "- Tu dois paraphraser l’extrait fourni dans 'Contexte (extraits)'.",
+    "- Tu ne cites que via source_ids_allowed / citations autorisées.",
+    "",
+    "Structure obligatoire (remplie avec contenu, pas des consignes):",
+    "1) Idée centrale (paraphrase de l’extrait)",
+    "2) Ce qu’il faut prouver (liste claire)",
+    "3) Mini-exemple guidé (faits → application → conclusion)",
+    "4) Pièges fréquents (2–4 points)",
+    "5) 3 questions de suivi",
+    "",
+    "=== CONTEXTE COMPLET ===",
+    args.userPayloadText,
+  ].join("\n");
+
+  const rewritten = await args.openaiCall({
+    system: "Réécriture pédagogique. Respecte STRICTEMENT les citations autorisées.",
+    user: rewriteUser,
+  });
+
+  return rewritten?.trim() ? rewritten.trim() : args.answer;
+}
 
 function safeJsonParse<T>(text: string): T | null {
   try {
@@ -1637,6 +1677,55 @@ function buildServerIlacFallback(args: {
 // ------------------------------
 // Format answer (ModelJson actuel)
 // ------------------------------
+// ------------------------------
+// Format answer (ModelJson actuel)
+// ------------------------------
+function ensureMinLength(answer: string, args: { message: string; gmode?: string }) {
+  const gmode = args.gmode ?? "comprendre";
+  const min = gmode === "comprendre" ? 1200 : gmode === "examen" ? 900 : 700; // caractères
+
+  const base = (answer ?? "").trim();
+  if (base.length >= min) return base;
+
+  // Expansion déterministe (pas de nouveau retrieval, pas de nouvelles citations)
+  // Objectif: rendre la réponse réellement pédagogique même avec 1 seule source.
+  return [
+    base,
+    "",
+    "### Idée centrale (en mots simples)",
+    "- Reformule l’article comme une règle pratique : **qui doit faire quoi, et dans quelles conditions**.",
+    "",
+    "### Ce qu’il faut prouver (checklist)",
+    "- **Fait déclencheur** : quel comportement ou omission est reproché ?",
+    "- **Faute / manquement** : en quoi le comportement s’écarte-t-il de ce qu’on attend ?",
+    "- **Dommage** : quel préjudice concret est invoqué ?",
+    "- **Lien causal** : pourquoi ce dommage découle-t-il de ce comportement ?",
+    "",
+    "### Mini-exemple guidé",
+    "1) Décris une situation simple (2–3 phrases).",
+    "2) Applique la checklist ci-dessus point par point.",
+    "3) Conclus : responsabilité probable ou non, et pourquoi.",
+    "",
+    "### Pièges fréquents",
+    "- Confondre **dommage** (conséquence) et **faute** (comportement).",
+    "- Oublier le **lien causal** (même s’il y a faute + dommage).",
+    "- Rester vague : il faut des faits concrets pour appliquer la règle.",
+    "",
+    "### Pour aller plus loin (3 questions)",
+    "- Quels faits précis peux-tu donner (chronologie, acteurs, dommages) pour appliquer l’article à TON cas ?",
+    "- Est-ce une situation plutôt **contractuelle** ou **extra-contractuelle** (ou mixte) ?",
+    "- Quel type de dommage (matériel, corporel, moral) est allégué et comment il est démontré ?",
+  ].join("\n");
+}
+
+function buildUserPayloadText(userPayload: string[] | string): string {
+  if (typeof userPayload === "string") return userPayload;
+  return userPayload.reduce((acc, v) => {
+    const s = typeof v === "string" ? v.trim() : "";
+    return s ? (acc ? acc + "\n" + s : s) : acc;
+  }, "");
+}
+
 function renderAnswer(args: {
   parsed: ModelJson;
   sources: Source[];
@@ -1647,10 +1736,10 @@ function renderAnswer(args: {
 }): string {
   const { parsed, sources, serverWarning, examTip, mode } = args;
 
+  // PROD: réponse conversationnelle uniquement (pas de “debug blocks”)
   if (mode === "prod") {
-    // retourne seulement une réponse fluide (answer_markdown si présent)
     const body = (parsed.answer_markdown ?? "").trim();
-    const followups = (parsed.followups ?? []).slice(0, 3);
+    const followups = Array.isArray(parsed.followups) ? parsed.followups.filter(Boolean).slice(0, 3) : [];
     const sourcesLines = (parsed.source_ids_used ?? [])
       .map((id) => sources.find((s) => String(s.id) === String(id))?.citation)
       .filter(Boolean)
@@ -1659,29 +1748,14 @@ function renderAnswer(args: {
 
     return [
       body || (parsed.ilac ? `${parsed.ilac.conclusion}` : "Je te réponds au mieux avec le corpus actuel."),
-      followups.length ? `\n\n**Si tu veux, je peux :**\n${followups.map(f => `- ${f}`).join("\n")}` : "",
+      followups.length ? `\n\n**Si tu veux, je peux :**\n${followups.map((f) => `- ${f}`).join("\n")}` : "",
       sourcesLines ? `\n\n**Sources (corpus)**\n${sourcesLines}` : "",
-    ].filter(Boolean).join("");
+    ]
+      .filter(Boolean)
+      .join("");
   }
 
-
-function ensureMinLength(answer: string, args: { message: string; gmode: string }) {
-  const min = args.gmode === "comprendre" ? 1200 : args.gmode === "examen" ? 900 : 700; // caractères
-  if ((answer ?? "").trim().length >= min) return answer;
-
-  // expansion déterministe (sans 2e appel OpenAI) :
-  return [
-    answer.trim(),
-    "",
-    "—",
-    "",
-    "Pour être certain de bien te guider :",
-    "1) Peux-tu préciser le contexte factuel (2–3 lignes) ?",
-    "2) Est-ce que tu vises une réponse **examen** (checklist) ou **compréhension** (explication + exemple) ?",
-  ].join("\n");
-}
-
-
+  // DEV: conserve des blocs structurés utiles pour QA (mais sans inventer)
   const missingBlock =
     Array.isArray(parsed.missing_coverage) && parsed.missing_coverage.length
       ? `**Couverture manquante**\n\n${parsed.missing_coverage.map((x) => `- ${x}`).join("\n")}`
@@ -1692,7 +1766,7 @@ function ensureMinLength(answer: string, args: { message: string; gmode: string 
       ? `**À ingérer pour répondre avec certitude**\n${parsed.ingest_needed.map((x) => `- ${x}`).join("\n")}`
       : "";
 
-  const partialBlock = ""; // volontaire: pas de “réponse partielle”
+  const partialBlock = ""; // volontaire: pas de “réponse partielle” visible
 
   if (parsed.type === "refuse") {
     return [
@@ -1709,13 +1783,11 @@ function ensureMinLength(answer: string, args: { message: string; gmode: string 
   const ilac = parsed.ilac;
   if (!ilac) {
     return [
-      // (interne) juridiction/domaine gardés dans logs/usage uniquement
-      "",
-      serverWarning || parsed.warning ? `\n\n⚠️ ${serverWarning || parsed.warning}\n` : "",
+      serverWarning || parsed.warning ? `⚠️ ${serverWarning || parsed.warning}` : "",
       missingBlock,
       ingestBlock,
-      "\n*(Structure ILAC indisponible dans la réponse modèle.)*",
-      examTip ? `\n**Conseil examen**\n${examTip}\n` : "",
+      "*(Structure ILAC indisponible dans la réponse modèle.)*",
+      examTip ? `\n**Conseil examen**\n${examTip}` : "",
     ]
       .filter((x): x is string => Boolean(x && x.trim()))
       .join("\n");
@@ -1737,11 +1809,9 @@ function ensureMinLength(answer: string, args: { message: string; gmode: string 
     .filter((x): x is string => Boolean(x))
     .join("\n");
 
-  const warn = serverWarning || parsed.warning ? `\n\n⚠️ ${serverWarning || parsed.warning}\n` : "";
+  const warn = serverWarning || parsed.warning ? `⚠️ ${serverWarning || parsed.warning}` : "";
 
   return [
-    // (interne) juridiction/domaine gardés dans logs/usage uniquement
-    "",
     warn,
     partialBlock,
     `**Problème**\n${ilac.probleme}`,
@@ -1958,43 +2028,7 @@ function detectExplicitArticleRef(message: string): { code_id: string; article: 
   return { code_id, article };
 }
 
-function ensureMinLength(answer: string, args: { message: string; gmode?: string }) {
-  const gmode = args.gmode ?? "comprendre";
-  const min = gmode === "comprendre" ? 1200 : gmode === "examen" ? 900 : 700; // caractères
 
-  const base = (answer ?? "").trim();
-  if (base.length >= min) return base;
-
-  // Expansion déterministe (pas de nouveau retrieval, pas de nouvelles citations)
-  // Objectif: rendre la réponse réellement pédagogique même avec 1 seule source.
-  return [
-    base,
-    "",
-    "### Idée centrale (en mots simples)",
-    "- Reformule l’article comme une règle pratique : **qui doit faire quoi, et dans quelles conditions**.",
-    "",
-    "### Ce qu’il faut prouver (checklist)",
-    "- **Fait déclencheur** : quel comportement ou omission est reproché ?",
-    "- **Faute / manquement** : en quoi le comportement s’écarte-t-il de ce qu’on attend ?",
-    "- **Dommage** : quel préjudice concret est invoqué ?",
-    "- **Lien causal** : pourquoi ce dommage découle-t-il de ce comportement ?",
-    "",
-    "### Mini-exemple guidé",
-    "1) Décris une situation simple (2–3 phrases).",
-    "2) Applique la checklist ci-dessus point par point.",
-    "3) Conclus: responsabilité probable ou non, et pourquoi.",
-    "",
-    "### Pièges fréquents",
-    "- Confondre **dommage** (conséquence) et **faute** (comportement).",
-    "- Oublier le **lien causal** (même s’il y a faute + dommage).",
-    "- Rester vague: il faut des faits concrets pour appliquer la règle.",
-    "",
-    "### Pour aller plus loin (3 questions)",
-    "- Quels faits précis pourrais-tu me donner (chronologie, acteurs, dommages) pour appliquer l’article à TON cas ?",
-    "- Est-ce une situation plutôt **contractuelle** ou **extra-contractuelle** (ou mixte) ?",
-    "- Quel type de dommage (matériel, corporel, moral) est allégué et comment il est démontré ?",
-  ].join("\n");
-}
 
 // ------------------------------
 // POST
@@ -2004,7 +2038,6 @@ export async function POST(req: Request) {
   const {
     data: { user },
   } = await supabaseAuth.auth.getUser();
-
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
   }
@@ -2599,12 +2632,29 @@ ${pits || "- (none)"}`;
 }
 
 
-    const clientPayload =
+// ✅ Toujours renvoyer les sources + followups au client (prod/dev)
+//    En prod: on masque seulement les diagnostics internes.
+// ✅ Toujours renvoyer les sources + followups au client (prod/dev)
+//    En prod: on masque seulement les diagnostics internes.
+//    NB: Ici (no-source/low-relevance), on n’a pas de `parsed` (pas d’appel modèle).
+const followups = [
+  "Si tu veux, je peux te poser 3 questions pour préciser les faits et conclure plus solidement.",
+  "Si tu veux, je peux te proposer un plan ILAC/IRAC à remplir avec tes faits (sans citations inventées).",
+  "Si tu veux, je peux t’indiquer exactement quels textes/lois ingérer pour obtenir une réponse avec citations.",
+];
+
+const basePayload = {
+  type: "answer" as const,
+  answer,
+  sources,
+  followups,
+};
+
+const clientPayload =
   mode === "prod"
-    ? { answer, sources: [] } // ✅ prod: pas de diagnostics
+    ? basePayload
     : {
-        answer,
-        sources: [],
+        ...basePayload,
         usage: {
           type: "answer",
           goal_mode: gmode,
@@ -2620,9 +2670,14 @@ ${pits || "- (none)"}`;
           kernels_count: kernelHits.length,
           distinctions_count: distinctions.length,
         },
+        missing_coverage: cov?.missing_coverage ?? [],
+        ingest_needed: cov?.ingest_needed ?? [],
+        source_ids_used: [],
       };
 
 return json(clientPayload);
+
+
 
     }
 
@@ -2751,6 +2806,17 @@ RÈGLES:
         missing_coverage: cov.missing_coverage,
         ingest_needed: cov.ingest_needed,
       });
+// ✅ Followups fallback (parsed existe ici, pas ailleurs)
+let followups =
+  Array.isArray(parsed?.followups) ? parsed.followups.filter(Boolean).slice(0, 3) : [];
+
+if (!followups.length) {
+  followups = [
+    "Si tu veux, je peux l’appliquer à un mini-cas que tu inventes (2–3 phrases).",
+    "Si tu veux, je peux te faire une checklist d’examen (faute / dommage / causalité) + pièges.",
+    "Si tu veux, je peux te poser 3 questions pour préciser les faits et conclure plus solidement.",
+  ];
+}
 
      try {
   const { error: logError } = await supabaseAuth.from("logs").insert({
@@ -2796,9 +2862,21 @@ RÈGLES:
   console.warn("log insert failed:", e);
 }
 
-      return json({
-        answer,
-        sources: [],
+      // ✅ Payload robuste (prod/dev) — sources + followups toujours renvoyés.
+//    En prod: on masque seulement les diagnostics internes.
+const basePayload = {
+  type: (parsed?.type ?? "answer"),
+  answer,
+  sources,
+  followups,
+  ...(parsed?.quiz ? { quiz: parsed.quiz } : {}),
+};
+
+const clientPayload =
+  mode === "prod"
+    ? basePayload
+    : {
+        ...basePayload,
         usage: {
           type: "answer",
           goal_mode: gmode,
@@ -2809,12 +2887,17 @@ RÈGLES:
           rag_quality,
           relevance_ok,
           coverage_ok,
-          partial: true,
+          partial: Boolean(parsed?.partial),
           hybrid_error: hybridError,
           kernels_count: kernelHits.length,
           distinctions_count: distinctions.length,
         },
-      });
+        missing_coverage: parsed?.missing_coverage ?? cov?.missing_coverage ?? [],
+        ingest_needed: parsed?.ingest_needed ?? cov?.ingest_needed ?? [],
+        source_ids_used: parsed?.source_ids_used ?? [],
+      };
+
+return json(clientPayload);
     }
 
     // ------------------------------
@@ -2925,6 +3008,30 @@ RÈGLES:
 if (mode === "prod") {
   answer = ensureMinLength(answer, { message, gmode });
 }
+
+const userPayloadText = buildUserPayloadText(userPayload);
+
+
+
+answer = await expandAnswerIfTooShort({
+  mode,
+  explicitArticleAsked,
+  answer,
+  minChars: 1200,
+  userPayloadText,
+  allowed_citations,
+  allowed_source_ids,
+  openaiCall: async ({ system, user }) => {
+    // TODO: remplace par TON appel OpenAI existant
+    // ex: return await callModelRaw({ system, user })
+    const { content } = await createChatCompletion([
+  { role: "system", content: system },
+  { role: "user", content: user },
+]);
+return content;
+
+  },
+});
 
 
 
