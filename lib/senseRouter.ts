@@ -27,6 +27,19 @@ type LegalSense = {
 
 type Trigger = { sense_id: string; type: "pos" | "neg"; pattern: string; weight: number };
 
+const HEALTH_STRONG = [
+  "soin", "soins", "patient", "hôpital", "hopital", "clsc",
+  "médecin", "medecin", "infirm", "chirurgie", "urgence",
+  "dossier médical", "dossier medical", "diagnostic", "traitement"
+];
+
+function countHealthSignals(msg: string) {
+  const m = msg.toLowerCase();
+  let c = 0;
+  for (const w of HEALTH_STRONG) if (m.includes(w)) c++;
+  return c;
+}
+
 const HIGH_RISK_TERMS = new Set([
   "consentement",
   "capacité",
@@ -149,6 +162,10 @@ function hasContractSignals(msg: string) {
   const msgEmb = await args.createEmbedding(message).catch(() => undefined);
   const bySense = senses.map((s) => {
     let score = 0;
+const healthCount = countHealthSignals(message);
+if (String(s.domain).toLowerCase() === "sante" && healthCount < 2) {
+  score -= 50; // ✅ empêche “consentement” seul de pousser Santé
+}
 
     // course prior
     if (course_slug && course_slug !== "general") {

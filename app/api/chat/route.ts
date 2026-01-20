@@ -124,6 +124,27 @@ function normalizeJurisdiction(j: string | null | undefined): Jurisdiction | "OT
   if (s.includes("QUEBEC") || s.includes("QUÉBEC")) return "QC";
   return "OTHER";
 }
+function scoreContext(message: string) {
+  const m = message.toLowerCase();
+
+  const civil = [
+    "contrat","obligation","clause","nullité","nullite","dol","erreur","violence",
+    "inexécution","inexecution","responsabilité","responsabilite","1457","ccq","lpc"
+  ];
+  const health = ["soin","patient","hôpital","hopital","clsc","médecin","medecin","urgence"];
+  const penal = ["code criminel","criminel","accusé","accuse","infraction","procès","proces","arrestation","charte canadienne"];
+  const fed = ["irpa","immigration","emploi fédéral","emploi federal","banque","aérien","aerien","télécom","telecom"];
+
+  const count = (arr: string[]) => arr.reduce((n, w) => n + (m.includes(w) ? 1 : 0), 0);
+
+  return {
+    civil: count(civil),
+    health: count(health),
+    penal: count(penal),
+    fed: count(fed),
+    len: m.trim().split(/\s+/).length
+  };
+}
 
 function isStatementTimeout(errMsg: string) {
   return (
@@ -1333,13 +1354,14 @@ async function hybridSearchWithRetry(args: {
   for (let i = 0; i < attempts.length; i++) {
     const a = attempts[i];
     try {
-      const hits = await hybridSearchRPC({
-        query_text,
-        query_embedding,
-        match_count: a.match_count,
-        filter_jurisdiction_norm: a.filter_jurisdiction_norm,
-        filter_bucket: a.filter_jurisdiction_norm ?? null,
-      });
+    const hits = await hybridSearchRPC({
+      query_text,
+      query_embedding,
+      match_count: a.match_count,
+      filter_jurisdiction_norm: a.filter_jurisdiction_norm,
+      filter_bucket: null, // ✅ IMPORTANT : ne pas confondre bucket et juridiction
+});
+
       return { hits, hybridError: null };
     } catch (e: any) {
       lastErr = e?.message ?? String(e);
