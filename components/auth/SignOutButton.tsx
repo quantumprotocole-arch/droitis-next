@@ -5,7 +5,6 @@ import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '../../lib/supabase/client'
 
-
 export default function SignOutButton() {
   const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
@@ -23,11 +22,7 @@ export default function SignOutButton() {
   }
 
   return (
-    <button
-      onClick={signOut}
-      disabled={loading}
-      className="rounded-md border px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-60"
-    >
+    <button onClick={signOut} disabled={loading} className="droitis-btn-secondary px-3 py-2 text-sm">
       {loading ? '...' : 'Se déconnecter'}
     </button>
   )

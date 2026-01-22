@@ -1,413 +1,415 @@
-"use client";
+'use client'
 
-import { useMemo, useState } from "react";
-import { extractPdfTextFromFile } from "@/lib/case-reader/pdfText.client";
-export const dynamic = "force-dynamic";
+import { useMemo, useState } from 'react'
+import Link from 'next/link'
+import BrandBackground from '@/components/ui/BrandBackground'
+import DroitisLogo from '@/components/ui/DroitisLogo'
+import Accordion from '@/components/ui/Accordion'
 
+// Client-side PDF text fallback (si déjà présent dans ton code)
+import { extractPdfTextFromFile } from '@/lib/case-reader/pdfText.client'
+
+export const dynamic = 'force-dynamic'
 
 type Clarify = {
-  type: "clarify";
-  output_mode: "fiche" | "analyse_longue";
-  clarification_questions: string[];
-};
+  type: 'clarify'
+  output_mode: 'fiche' | 'analyse_longue'
+  clarification_questions: string[]
+}
 
 type Answer = {
-  type: "answer";
-  output_mode: "fiche" | "analyse_longue";
-  meta: any;
-  context: any;
-  facts: any;
-  issues: string[];
-  rule_test: any;
-  application_reasoning: any;
-  scope_for_course: any;
-  takeaways: string[];
-  anchors: any[];
-  clarification_questions?: string[];
-};
-
-type Output = Clarify | Answer | any;
-
-function safeStr(x: any) {
-  if (x === null || x === undefined) return "";
-  if (typeof x === "string") return x;
-  return String(x);
+  type: 'answer'
+  output_mode: 'fiche' | 'analyse_longue'
+  title?: string
+  content_markdown: string
+  sources?: { title?: string; citation?: string; jurisdiction?: string }[]
+  limits?: string[]
 }
 
-function isPdfFile(file: File) {
-  const name = (file.name || "").toLowerCase();
-  const type = (file.type || "").toLowerCase();
-  return type === "application/pdf" || name.endsWith(".pdf");
-}
-
-function isDocxFile(file: File) {
-  const name = (file.name || "").toLowerCase();
-  const type = (file.type || "").toLowerCase();
+function DocIcon({ className }: { className?: string }) {
   return (
-    type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-    name.endsWith(".docx")
-  );
+    <svg viewBox="0 0 24 24" aria-hidden="true" className={className}>
+      <path
+        d="M7 3h7l3 3v15a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path d="M14 3v4h4" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M8 11h8M8 15h8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 export default function CaseReaderPage() {
-  const [caseText, setCaseText] = useState("");
-  const [outputMode, setOutputMode] = useState<"fiche" | "analyse_longue">("analyse_longue");
-  const [institutionSlug, setInstitutionSlug] = useState("udes");
-  const [courseSlug, setCourseSlug] = useState("obligations-1");
+  const [file, setFile] = useState<File | null>(null)
+  const [outputMode, setOutputMode] = useState<'fiche' | 'analyse_longue'>('fiche')
+  const [extractMethod, setExtractMethod] = useState<'server' | 'client'>('server')
+  const [caseText, setCaseText] = useState('')
+  const [status, setStatus] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const [file, setFile] = useState<File | null>(null);
+  const [result, setResult] = useState<Clarify | Answer | null>(null)
+  const [clarifyAnswers, setClarifyAnswers] = useState<Record<number, string>>({})
 
-  const [loading, setLoading] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const canAnalyze = Boolean(caseText.trim().length > 50)
 
-  const [status, setStatus] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<Output | null>(null);
+  const fileLabel = useMemo(() => (file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} Mo` : 'Aucun fichier'), [file])
 
-  const canDownload = useMemo(() => {
-    return data && data.type === "answer";
-  }, [data]);
-
-  const elementsImportants = useMemo(() => {
-    const takeaways = data && data.type === "answer" ? (data.takeaways ?? []) : [];
-    const defs = takeaways.filter((t: string) => {
-      const s = String(t ?? "").trim().toLowerCase();
-      return s.startsWith("définition —") || s.startsWith("definition —");
-    });
-    const others = takeaways.filter((t: string) => !defs.includes(t));
-    return { definitions: defs, otherTakeaways: others };
-  }, [data]);
-
-
-  async function onExtractFile() {
-    if (!file) return;
-    setLoading(true);
-    setError(null);
-    setStatus(null);
-    setData(null); // on efface l’ancienne sortie si on change le texte
+  async function extract() {
+    if (!file) return
+    setBusy(true)
+    setError(null)
+    setResult(null)
+    setStatus(null)
 
     try {
-      // ✅ 1) PDF => extraction côté client (évite canvas sur Vercel)
-      if (isPdfFile(file)) {
-        const text = await extractPdfTextFromFile(file);
-
-        // Heuristique "PDF scanné" : trop peu de caractères non-espace
-        const compact = text.replace(/\s+/g, "");
-        if (compact.length < 200) {
-          throw new Error(
-            "Ce PDF semble être un scan (image) : il ne contient pas de texte sélectionnable.\n\n" +
-              "Solutions :\n" +
-              "• Exporter la décision en PDF texte (depuis Word/CanLII/éditeur) ou utiliser un DOCX\n" +
-              "• Ou copier-coller le texte directement dans la zone\n"
-          );
-        }
-
-        setCaseText(text);
-        return;
+      if (extractMethod === 'client' && file.type === 'application/pdf') {
+        const txt = await extractPdfTextFromFile(file)
+        setCaseText(txt || '')
+        setStatus(200)
+        return
       }
 
-      // ✅ 2) DOCX => extraction côté serveur (ça marche déjà)
-      if (isDocxFile(file)) {
-        const fd = new FormData();
-        fd.append("file", file);
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/case-reader/extract', { method: 'POST', body: fd })
+      setStatus(res.status)
 
-        const res = await fetch("/api/case-reader/extract", { method: "POST", body: fd });
-        setStatus(res.status);
-
-        const text = await res.text();
-        let json: any;
-        try {
-          json = JSON.parse(text);
-        } catch {
-          throw new Error("Réponse non-JSON (extract): " + text.slice(0, 300));
-        }
-
-        if (!res.ok) throw new Error(json?.error ?? `Extraction error (${res.status})`);
-
-        setCaseText(json.extracted_text ?? "");
-        return;
-      }
-
-      throw new Error("Format non supporté. Utilise un fichier .pdf ou .docx.");
-    } catch (e: any) {
-      setError(String(e?.message ?? e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function onGenerate() {
-    setLoading(true);
-    setError(null);
-    setData(null);
-    setStatus(null);
-
-    try {
-      const res = await fetch("/api/case-reader", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          output_mode: outputMode,
-          case_text: caseText,
-          institution_slug: institutionSlug,
-          course_slug: courseSlug
-        })
-      });
-
-      setStatus(res.status);
-      const text = await res.text();
-
-      let json: any;
+      const text = await res.text()
+      let json: any
       try {
-        json = JSON.parse(text);
+        json = JSON.parse(text)
       } catch {
-        throw new Error("Réponse non-JSON: " + text.slice(0, 300));
+        throw new Error('Réponse non-JSON (extract): ' + text.slice(0, 300))
       }
 
-      if (!res.ok) {
-        throw new Error(json?.error ?? `Erreur API (${res.status})`);
-      }
-
-      setData(json);
+      if (!res.ok) throw new Error(json?.error ?? `Extraction error (${res.status})`)
+      setCaseText(json.extracted_text ?? '')
     } catch (e: any) {
-      setError(String(e?.message ?? e));
+      setError(e?.message ?? 'Erreur extraction.')
     } finally {
-      setLoading(false);
+      setBusy(false)
     }
   }
 
-  async function onDownloadDocx() {
-    if (!data || data.type !== "answer") return;
-    setDownloading(true);
-    setError(null);
+  async function analyze() {
+    if (!canAnalyze) return
+    setBusy(true)
+    setError(null)
+    setResult(null)
+    setStatus(null)
 
     try {
-      const res = await fetch("/api/case-reader/docx", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ case_reader_output: data })
-      });
-
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error("Download failed: " + t.slice(0, 300));
-      }
-
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-
-      const filename = `droitis-fiche-${institutionSlug}-${courseSlug}.docx`;
-
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-
-      URL.revokeObjectURL(url);
+      const res = await fetch('/api/case-reader/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          extracted_text: caseText,
+          output_mode: outputMode,
+          clarification_answers: {},
+        }),
+      })
+      setStatus(res.status)
+      const json = await res.json()
+      if (!res.ok) throw new Error(json?.error ?? `Analyse error (${res.status})`)
+      setResult(json)
     } catch (e: any) {
-      setError(String(e?.message ?? e));
+      setError(e?.message ?? 'Erreur analyse.')
     } finally {
-      setDownloading(false);
+      setBusy(false)
+    }
+  }
+
+  async function analyzeWithClarifications() {
+    if (!result || result.type !== 'clarify') return
+    setBusy(true)
+    setError(null)
+    setStatus(null)
+
+    try {
+      const res = await fetch('/api/case-reader/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          extracted_text: caseText,
+          output_mode: result.output_mode,
+          clarification_answers: clarifyAnswers,
+        }),
+      })
+      setStatus(res.status)
+      const json = await res.json()
+      if (!res.ok) throw new Error(json?.error ?? `Analyse error (${res.status})`)
+      setResult(json)
+    } catch (e: any) {
+      setError(e?.message ?? 'Erreur analyse.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function exportDocx() {
+    if (!result || result.type !== 'answer') return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/case-reader/export-docx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: result.title ?? 'Fiche', markdown: result.content_markdown }),
+      })
+      if (!res.ok) throw new Error((await res.json())?.error ?? 'Erreur export DOCX.')
+      const blob = await res.blob()
+      downloadBlob(blob, 'droitis-case-reader.docx')
+    } catch (e: any) {
+      setError(e?.message ?? 'Erreur export DOCX.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function exportPdf() {
+    if (!result || result.type !== 'answer') return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/case-reader/export-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: result.title ?? 'Fiche', markdown: result.content_markdown }),
+      })
+      if (!res.ok) throw new Error((await res.json())?.error ?? 'Erreur export PDF.')
+      const blob = await res.blob()
+      downloadBlob(blob, 'droitis-case-reader.pdf')
+    } catch (e: any) {
+      setError(e?.message ?? 'Erreur export PDF.')
+    } finally {
+      setBusy(false)
     }
   }
 
   return (
-    <div style={{ maxWidth: 980, margin: "0 auto", padding: 24 }}>
-      <h1>Case Reader</h1>
-      <p style={{ opacity: 0.8 }}>
-        Dépose un PDF/DOCX ou colle un extrait (avec paragraphes si possible). Si l’extrait est trop vague, Droitis pose 1–3 questions.
-      </p>
+    <BrandBackground className="pb-10">
+      <div className="mx-auto max-w-6xl px-4 py-4">
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <Link href="/app" className="flex items-center gap-2">
+            <span className="h-8 w-8">
+              <DroitisLogo className="h-8 w-8" />
+            </span>
+            <div>
+              <div className="text-sm font-extrabold tracking-wide text-droitis-ink2">Case Reader</div>
+              <div className="text-xs text-droitis-ink/70">Analyse un PDF/DOCX et génère une fiche exportable.</div>
+            </div>
+          </Link>
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-        <label>
-          Output&nbsp;
-          <select value={outputMode} onChange={(e) => setOutputMode(e.target.value as any)}>
-            <option value="analyse_longue">Analyse longue</option>
-            <option value="fiche">Fiche (DOCX)</option>
-          </select>
-        </label>
+          <Link href="/app" className="droitis-btn-secondary px-3 py-2">
+            Retour au Chat
+          </Link>
+        </header>
 
-        <label>
-          institution_slug&nbsp;
-          <input value={institutionSlug} onChange={(e) => setInstitutionSlug(e.target.value)} />
-        </label>
+        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          {/* Left: upload + controls */}
+          <div className="rounded-xl2 border border-white/50 bg-white/55 p-4 shadow-soft lg:col-span-1">
+            <div className="flex items-center gap-2">
+              <DocIcon className="h-5 w-5 text-droitis-ink" />
+              <div className="text-sm font-extrabold tracking-wide text-droitis-ink2">Document</div>
+            </div>
 
-        <label>
-          course_slug&nbsp;
-          <input value={courseSlug} onChange={(e) => setCourseSlug(e.target.value)} />
-        </label>
+            <div className="mt-3">
+              <div className="text-xs font-semibold text-droitis-ink/70">Fichier</div>
+              <label className="mt-2 block cursor-pointer rounded-xl2 border border-droitis-stroke bg-white/65 p-4 text-sm shadow-sm transition hover:bg-white">
+                <input
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                />
+                <div className="font-semibold">{file ? 'Changer le fichier' : 'Téléverser PDF/DOCX'}</div>
+                <div className="mt-1 text-xs text-droitis-ink/70">{fileLabel}</div>
+                <div className="mt-2 text-[11px] text-droitis-ink/65">IP : le document n’est pas ingéré globalement.</div>
+              </label>
+            </div>
 
-        <button onClick={onGenerate} disabled={loading || caseText.trim().length === 0}>
-          {loading ? "Génération..." : "Générer"}
-        </button>
+            <div className="mt-4">
+              <div className="text-xs font-semibold text-droitis-ink/70">Extraction</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="droitis-chip"
+                  data-active={String(extractMethod === 'server')}
+                  onClick={() => setExtractMethod('server')}
+                >
+                  Serveur (recommandé)
+                </button>
+                <button
+                  type="button"
+                  className="droitis-chip"
+                  data-active={String(extractMethod === 'client')}
+                  onClick={() => setExtractMethod('client')}
+                >
+                  Client (PDF)
+                </button>
+              </div>
+            </div>
 
-        <button onClick={onDownloadDocx} disabled={!canDownload || downloading}>
-          {downloading ? "Téléchargement..." : "Télécharger (.docx)"}
-        </button>
+            <div className="mt-4">
+              <div className="text-xs font-semibold text-droitis-ink/70">Sortie</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="droitis-chip"
+                  data-active={String(outputMode === 'fiche')}
+                  onClick={() => setOutputMode('fiche')}
+                >
+                  Fiche
+                </button>
+                <button
+                  type="button"
+                  className="droitis-chip"
+                  data-active={String(outputMode === 'analyse_longue')}
+                  onClick={() => setOutputMode('analyse_longue')}
+                >
+                  Analyse longue
+                </button>
+              </div>
+            </div>
 
-        {status !== null && <span style={{ opacity: 0.8 }}>STATUS: {status}</span>}
-        {error && <span style={{ color: "crimson", whiteSpace: "pre-wrap" }}>{error}</span>}
-      </div>
+            <div className="mt-4 flex flex-col gap-2">
+              <button className="droitis-btn" disabled={!file || busy} onClick={extract}>
+                {busy ? '...' : 'Extraire le texte'}
+              </button>
+              <button className="droitis-btn-secondary" disabled={!canAnalyze || busy} onClick={analyze}>
+                {busy ? '...' : 'Analyser'}
+              </button>
+            </div>
 
-      {/* Upload + extraction */}
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-        <input
-          type="file"
-          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        />
-        <button onClick={onExtractFile} disabled={!file || loading}>
-          {loading ? "Extraction..." : "Extraire le texte"}
-        </button>
-        {file && (
-          <span style={{ opacity: 0.8 }}>
-            Fichier: {file.name} ({Math.round(file.size / 1024)} KB)
-          </span>
-        )}
-      </div>
+            {status !== null && <div className="mt-3 text-xs text-droitis-ink/70">HTTP: {status}</div>}
 
-      <textarea
-        value={caseText}
-        onChange={(e) => setCaseText(e.target.value)}
-        placeholder="Colle ici la décision ou un extrait…"
-        style={{ width: "100%", minHeight: 220, padding: 12, fontFamily: "inherit" }}
-      />
+            {error && (
+              <div className="mt-3 rounded-xl2 border border-droitis-stroke bg-white/65 p-3 text-sm">
+                <div className="font-semibold">Erreur</div>
+                <div className="mt-1 text-xs text-droitis-ink/75">{error}</div>
+              </div>
+            )}
+          </div>
 
-      <hr style={{ margin: "24px 0" }} />
+          {/* Right: text + result */}
+          <div className="rounded-xl2 border border-white/50 bg-white/55 p-4 shadow-soft lg:col-span-2">
+            <div className="text-sm font-extrabold tracking-wide text-droitis-ink2">Texte extrait</div>
+            <div className="mt-2 text-xs text-droitis-ink/70">
+              Vérifie l’extraction avant l’analyse (titres, paragraphes, pagination).
+            </div>
 
-      {!data && <p style={{ opacity: 0.7 }}>Aucun résultat pour le moment.</p>}
+            <textarea
+              className="droitis-input mt-3 min-h-[180px] resize-y"
+              value={caseText}
+              onChange={(e) => setCaseText(e.target.value)}
+              placeholder="Le texte extrait apparaîtra ici…"
+            />
 
-      {data?.type === "clarify" && (
-        <div>
-          <h2>Informations manquantes</h2>
-          <ol>
-            {(data.clarification_questions ?? []).map((q: string, idx: number) => (
-              <li key={idx}>{q}</li>
-            ))}
-          </ol>
-          <p style={{ opacity: 0.8 }}>
-            👉 Ajoute ces infos dans le texte (ou colle un extrait plus complet) puis relance.
-          </p>
+            <div className="mt-4 border-t border-white/50 pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-extrabold tracking-wide text-droitis-ink2">Résultat</div>
+                  <div className="mt-1 text-xs text-droitis-ink/70">
+                    Export DOCX/PDF disponible après une réponse (fiche ou analyse).
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <button className="droitis-btn-secondary px-3 py-2" disabled={busy || !result || result.type !== 'answer'} onClick={exportDocx}>
+                    Export DOCX
+                  </button>
+                  <button className="droitis-btn-secondary px-3 py-2" disabled={busy || !result || result.type !== 'answer'} onClick={exportPdf}>
+                    Export PDF
+                  </button>
+                </div>
+              </div>
+
+              {!result && (
+                <div className="mt-3 rounded-xl2 border border-droitis-stroke bg-white/65 p-4 text-sm text-droitis-ink/80">
+                  Lance l’analyse pour générer une fiche (ou une analyse longue).
+                </div>
+              )}
+
+              {result?.type === 'clarify' && (
+                <div className="mt-3 space-y-3">
+                  <div className="rounded-xl2 border border-droitis-stroke bg-white/65 p-4 text-sm">
+                    <div className="font-semibold">Questions de clarification</div>
+                    <div className="mt-1 text-xs text-droitis-ink/70">
+                      Pour améliorer la fiche, réponds brièvement (une phrase suffit).
+                    </div>
+                  </div>
+
+                  {result.clarification_questions.map((q, i) => (
+                    <div key={i} className="rounded-xl2 border border-droitis-stroke bg-white/65 p-4">
+                      <div className="text-sm font-semibold">{q}</div>
+                      <textarea
+                        className="droitis-input mt-2 min-h-[70px] resize-y"
+                        value={clarifyAnswers[i] ?? ''}
+                        onChange={(e) => setClarifyAnswers((m) => ({ ...m, [i]: e.target.value }))}
+                        placeholder="Ta réponse…"
+                      />
+                    </div>
+                  ))}
+
+                  <button className="droitis-btn" disabled={busy} onClick={analyzeWithClarifications}>
+                    Relancer avec clarifications
+                  </button>
+                </div>
+              )}
+
+              {result?.type === 'answer' && (
+                <div className="mt-3 space-y-3">
+                  <div className="rounded-xl2 border border-droitis-stroke bg-droitis-paper p-4">
+                    <div className="text-sm font-extrabold tracking-wide text-droitis-ink2">
+                      {result.title ?? (result.output_mode === 'fiche' ? 'Fiche' : 'Analyse')}
+                    </div>
+                    <div className="mt-3 whitespace-pre-wrap text-[15px] leading-relaxed">
+                      {result.content_markdown}
+                    </div>
+                  </div>
+
+                  <Accordion title="Sources utilisées" defaultOpen={false}>
+                    {result.sources && result.sources.length > 0 ? (
+                      <ul className="list-disc pl-5">
+                        {result.sources.map((s, i) => (
+                          <li key={i}>
+                            <span className="font-semibold">{s.title ?? 'Source'}</span>
+                            {s.jurisdiction ? <span className="text-droitis-ink/70"> — {s.jurisdiction}</span> : null}
+                            {s.citation ? <span className="text-droitis-ink/70"> — {s.citation}</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="text-sm text-droitis-ink/75">Aucune source structurée fournie.</div>
+                    )}
+                  </Accordion>
+
+                  <Accordion title="Rappel IP" defaultOpen={false}>
+                    <div className="text-sm text-droitis-ink/80">
+                      Le document sert uniquement à générer ta fiche/analyse. Il n’est pas “ingéré” pour entraîner un modèle
+                      global. (UI uniquement : le détail dépend de ton infra.)
+                    </div>
+                  </Accordion>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
-      )}
-
-      {data?.type === "answer" && (
-        <div>
-          <h2>Fiche / Analyse</h2>
-
-          <h2>Éléments importants</h2>
-          <p>
-            <b>Portée (cours):</b> {safeStr(data.scope_for_course?.course)}
-          </p>
-          <p style={{ whiteSpace: "pre-wrap" }}>{safeStr(data.scope_for_course?.what_it_changes)}</p>
-
-          <p>
-            <b>Attention ! En examen, si tu vois…</b> {safeStr(data.scope_for_course?.exam_spotting_box?.trigger)}
-          </p>
-          <p>
-            <b>Fais ça:</b>
-          </p>
-          <ul>
-            {(data.scope_for_course?.exam_spotting_box?.do_this ?? []).map((x: string, i: number) => (
-              <li key={i}>{x}</li>
-            ))}
-          </ul>
-          <p>
-            <b>Pièges à éviter:</b>
-          </p>
-          <ul>
-            {(data.scope_for_course?.exam_spotting_box?.pitfalls ?? []).map((x: string, i: number) => (
-              <li key={i}>{x}</li>
-            ))}
-          </ul>
-
-          <p>
-            <b>Définitions:</b>
-          </p>
-          <ul>
-            {(elementsImportants.definitions ?? []).map((t: string, i: number) => (
-              <li key={i}>{t}</li>
-            ))}
-          </ul>
-
-          <hr style={{ margin: "24px 0" }} />
-
-          <h3>1) Contexte</h3>
-          <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(data.context, null, 2)}</pre>
-
-          <h3>2) Faits essentiels</h3>
-          <p>{safeStr(data.facts?.summary)}</p>
-          <ul>
-            {(data.facts?.key_facts ?? []).map((kf: any, i: number) => (
-              <li key={i}>
-                {safeStr(kf.fact)} <span style={{ opacity: 0.7 }}>({safeStr(kf.importance)})</span>
-              </li>
-            ))}
-          </ul>
-
-          <h3>3) Question(s) en litige</h3>
-          <ul>
-            {(data.issues ?? []).map((iss: string, i: number) => (
-              <li key={i}>{iss}</li>
-            ))}
-          </ul>
-
-          <h3>4) Règle / Test</h3>
-          <h4>Règles</h4>
-          <ul>
-            {(data.rule_test?.rules ?? []).map((r: any, i: number) => (
-              <li key={i}>{safeStr(r.rule)}</li>
-            ))}
-          </ul>
-
-          <h4>Tests</h4>
-          <ul>
-            {(data.rule_test?.tests ?? []).map((t: any, i: number) => (
-              <li key={i}>
-                <b>{safeStr(t.name)}:</b> {(t.steps ?? []).join(" · ")}
-              </li>
-            ))}
-          </ul>
-
-          <h3>5) Application / Raisonnement</h3>
-          <ul>
-            {(data.application_reasoning?.structured_application ?? []).map((s: any, i: number) => (
-              <li key={i}>
-                <b>{safeStr(s.step)}</b> — {safeStr(s.analysis)}
-              </li>
-            ))}
-          </ul>
-          <p>
-            <b>Ratio / résultat:</b> {safeStr(data.application_reasoning?.ratio_or_result)}
-          </p>
-
-          <h3>Takeaways (autres)</h3>
-          <ul>
-            {(elementsImportants.otherTakeaways ?? []).map((t: string, i: number) => (
-              <li key={i}>{t}</li>
-            ))}
-          </ul>
-
-          <h3>Anchors (preuves d’ancrage)</h3>
-          <ul>
-            {(data.anchors ?? []).map((a: any, i: number) => (
-              <li key={i}>
-                <b>{safeStr(a.id)}</b> — {safeStr(a.anchor_type)} — {safeStr(a.location)} — “
-                {safeStr(a.evidence_snippet)}”
-              </li>
-            ))}
-          </ul>
-
-          <details style={{ marginTop: 16 }}>
-            <summary>Voir JSON brut</summary>
-            <pre style={{ whiteSpace: "pre-wrap", padding: 12, background: "#111", color: "#eee" }}>
-              {JSON.stringify(data, null, 2)}
-            </pre>
-          </details>
-        </div>
-      )}
-    </div>
-  );
+      </div>
+    </BrandBackground>
+  )
 }

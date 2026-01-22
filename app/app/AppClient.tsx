@@ -1,7 +1,10 @@
 // app/app/AppClient.tsx
 'use client'
 
-import React, { useCallback, useMemo, useState, useEffect } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
+import Link from 'next/link'
+import Accordion from '@/components/ui/Accordion'
+import Toggle from '@/components/ui/Toggle'
 
 type Source = {
   id?: string | number
@@ -22,485 +25,525 @@ type ApiResponse =
       details?: string
     }
 
-
 type CourseOption = {
-  course_slug: string;
-  course_title: string;
-  scope: "all" | "institution_specific";
-  institution_note: string | null;
-  tags: string[];
-  aliases: string[];
-};
-
-type CoursesApiResponse =
-  | { courses: CourseOption[] }
-  | { error: string; details?: string };
-
-type Props = {
-  isActive: boolean
-  status: string
+  course_slug: string
+  course_title: string
+  scope: 'all' | 'institution_specific'
 }
 
 const LOCK_EVERY_NTH_SEND = 4
 const FREE_SENDS_KEY = 'droitis_free_send_count_v1'
+const MEMORY_WINDOW = 12 // 6 user + 6 Droitis (UI)
 
-function PaywallBanner() {
+function DocIcon({ className }: { className?: string }) {
   return (
-    <div style={styles.paywall}>
-      <div>
-        <strong>Abonnement requis</strong>
-        <div style={{ opacity: 0.85, marginTop: 4 }}>
-          Tu es en mode gratuit : certaines fonctionnalités sont limitées.
-        </div>
-      </div>
-
-      <form method="POST" action="/api/stripe/checkout">
-        <button type="submit" style={styles.subscribeBtn}>
-          S’abonner
-        </button>
-      </form>
-    </div>
+    <svg viewBox="0 0 24 24" aria-hidden="true" className={className}>
+      <path
+        d="M7 3h7l3 3v15a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path d="M14 3v4h4" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M8 11h8M8 15h8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
   )
 }
 
-export default function AppClient({ isActive, status }: Props) {
-  const [message, setMessage] = useState('Explique l’art. 1457 C.c.Q.')
-  const [profile, setProfile] = useState<string>('')
-  const [topK, setTopK] = useState<number>(5)
-  const [mode, setMode] = useState<string>('prod')
-  const [userGoal, setUserGoal] = useState<string>('comprendre');
-  const [courseSlug, setCourseSlug] = useState<string>('general');
-  const [courses, setCourses] = useState<CourseOption[]>([])
-  const [coursesLoading, setCoursesLoading] = useState<boolean>(false)
-  const [coursesError, setCoursesError] = useState<string | null>(null)
+function Chevron({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className={className}>
+      <path
+        d="M7 10l5 5 5-5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
 
+function Badge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center rounded-full border border-droitis-stroke bg-white/60 px-3 py-1 text-xs font-semibold text-droitis-ink2">
+      {children}
+    </span>
+  )
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n))
+}
+
+function readFreeCount() {
+  try {
+    const raw = window.localStorage.getItem(FREE_SENDS_KEY)
+    return raw ? clamp(parseInt(raw, 10) || 0, 0, 1_000_000) : 0
+  } catch {
+    return 0
+  }
+}
+function writeFreeCount(n: number) {
+  try {
+    window.localStorage.setItem(FREE_SENDS_KEY, String(n))
+  } catch {}
+}
+
+type ChatMsg = { id: string; role: 'user' | 'assistant'; content: string; sources?: Source[] }
+
+const GOALS = [
+  { key: 'comprendre', label: 'Comprendre' },
+  { key: 'cas_pratique', label: 'Cas pratique' },
+  { key: 'examen', label: 'Examen / plan de réponse' },
+  { key: 'fiche', label: 'Fiche synthèse' },
+  { key: 'reformuler', label: 'Reformuler / simplifier' },
+] as const
+
+const LEVELS = ['Débutant', 'Intermédiaire', 'Avancé'] as const
+
+export default function AppClient({ isActive, status }: { isActive: boolean; status: string | null }) {
+  // ⚠️ UI only (pas d'impact backend)
+  const [courseQuery, setCourseQuery] = useState('')
+  const [courseSlug, setCourseSlug] = useState('general')
+  const [userGoal, setUserGoal] = useState<(typeof GOALS)[number]['key']>('comprendre')
+  const [level, setLevel] = useState<(typeof LEVELS)[number] | ''>('')
+  const [memoryEnabled, setMemoryEnabled] = useState(true)
+
+  const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [serverError, setServerError] = useState<string | null>(null)
 
-  const [answer, setAnswer] = useState<string>('')
-  const [sources, setSources] = useState<Source[]>([])
-  const [usage, setUsage] = useState<{ top_k?: number; rpcOk?: boolean } | undefined>(undefined)
+  const [thread, setThread] = useState<ChatMsg[]>([
+    {
+      id: 'welcome',
+      role: 'assistant',
+      content:
+        'Je suis Droitis. Dis-moi ce que tu veux comprendre (ou colle un extrait de cours / décision) et je te réponds de façon claire et structurée.',
+    },
+  ])
 
-  // Compteur “mode gratuit”
-  const [freeSendsUsed, setFreeSendsUsed] = useState<number>(() => {
-    if (typeof window === 'undefined') return 0
-    const raw = window.localStorage.getItem(FREE_SENDS_KEY)
-    return raw ? Number(raw) || 0 : 0
-  })
+  // --- Cours: mock typeahead (UI only). Tu pourras brancher sur tes vrais profils.
+  const courseOptions: CourseOption[] = useMemo(
+    () => [
+      { course_slug: 'general', course_title: 'Général', scope: 'all' },
+      { course_slug: 'responsabilite_civile', course_title: 'Responsabilité civile', scope: 'all' },
+      { course_slug: 'procedure_civile', course_title: 'Procédure civile', scope: 'all' },
+      { course_slug: 'droit_des_obligations', course_title: 'Droit des obligations', scope: 'all' },
+      { course_slug: 'biens', course_title: 'Droit des biens', scope: 'all' },
+    ],
+    []
+  )
 
-  const canSend = useMemo(() => message.trim().length > 0 && courseSlug.trim().length > 0 && !loading, [message, courseSlug, loading])
+  const filteredCourses = useMemo(() => {
+    const q = courseQuery.trim().toLowerCase()
+    if (!q) return courseOptions
+    return courseOptions.filter((c) => c.course_title.toLowerCase().includes(q) || c.course_slug.includes(q))
+  }, [courseOptions, courseQuery])
 
+  const planLabel = isActive ? 'Premium' : 'Gratuit'
 
-  useEffect(() => {
-    let alive = true
-    ;(async () => {
-      setCoursesLoading(true)
-      setCoursesError(null)
-      try {
-        const res = await fetch('/api/courses', { method: 'GET' })
-        const data: CoursesApiResponse = await res.json()
-        if (!res.ok) {
-          const msg = 'error' in data && data.error ? data.error : `Erreur API (${res.status})`
-          throw new Error(`${msg}${'details' in data && data.details ? `: ${data.details}` : ''}`)
-        }
-        if (alive) {
-          const list = 'courses' in data ? (data.courses ?? []) : []
-          setCourses(list)
-        }
-      } catch (e: any) {
-        if (alive) setCoursesError(e?.message ?? 'Failed to load courses')
-      } finally {
-        if (alive) setCoursesLoading(false)
-      }
-    })()
-    return () => {
-      alive = false
-    }
+  const resetConversation = useCallback(() => {
+    setThread([
+      {
+        id: 'welcome',
+        role: 'assistant',
+        content:
+          'Conversation réinitialisée. Dis-moi ce que tu veux travailler (notions, cas pratique, plan, etc.).',
+      },
+    ])
+    setServerError(null)
+    setMessage('')
   }, [])
 
-  const gatingCheck = () => {
-    // Si actif: pas de limite
-    if (isActive) return { ok: true, locked: false }
+  const buildFollowUps = useCallback(() => {
+    // Simple suggestions UI (pas d'invention de sources)
+    const base =
+      userGoal === 'cas_pratique'
+        ? ['Identifie les enjeux juridiques', 'Propose un plan IRAC', 'Quelles exceptions possibles ?']
+        : userGoal === 'examen'
+          ? ['Donne un plan en 3 parties', 'Fais une checklist de points à couvrir', 'Exemples de formulations']
+          : userGoal === 'fiche'
+            ? ['Fais une fiche (définitions + conditions)', 'Ajoute les pièges fréquents', 'Fais un tableau comparatif']
+            : userGoal === 'reformuler'
+              ? ['Simplifie encore', 'Explique comme à un débutant', 'Donne un exemple concret']
+              : ['Donne un exemple', 'Résume en 5 lignes', 'Qu’est-ce qui pourrait changer la réponse ?']
 
-    // Mode gratuit: 1 envoi sur N verrouillé
-    const locked = (freeSendsUsed + 1) % LOCK_EVERY_NTH_SEND === 0
-    return { ok: !locked, locked }
-  }
+    return base.slice(0, 3)
+  }, [userGoal])
 
-  const bumpFreeSend = () => {
-    const next = freeSendsUsed + 1
-    setFreeSendsUsed(next)
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(FREE_SENDS_KEY, String(next))
-    }
-  }
+  const send = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim()
+      if (!trimmed || loading) return
 
-  const send = useCallback(async () => {
-    if (!canSend) return
+      setServerError(null)
 
-    // gating
-    const gate = gatingCheck()
-    if (!gate.ok) {
-      setServerError(
-        `Mode gratuit : cette tentative est verrouillée (1 sur ${LOCK_EVERY_NTH_SEND}). Abonne-toi pour lever la limite.`
-      )
-      return
-    }
-
-    setLoading(true)
-    setServerError(null)
-    setAnswer('')
-    setSources([])
-    setUsage(undefined)
-
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message,
-          course_slug: courseSlug,
-          user_goal: userGoal,                 // ✅
-          profile: profile || null,
-          top_k: Math.max(1, Math.min(Number(topK) || 5, 20)),
-          mode: mode || "prod",                // ✅
-      }),
-
-      })
-
-      const data: ApiResponse = await res.json()
-
-      if (!res.ok) {
-        const msg = 'error' in data && data.error ? data.error : `Erreur API (${res.status})`
-        setServerError(`${msg}${'details' in data && data.details ? `: ${data.details}` : ''}`)
-        return
+      // Paywall soft (déjà présent avant) — UI only
+      if (!isActive) {
+        const count = readFreeCount() + 1
+        writeFreeCount(count)
+        if (count % LOCK_EVERY_NTH_SEND === 0) {
+          setServerError(
+            `Mode gratuit : cette tentative est verrouillée (1 sur ${LOCK_EVERY_NTH_SEND}). Abonne-toi pour lever la limite.`
+          )
+          return
+        }
       }
 
-      if ('answer' in data) {
-        setAnswer(data.answer)
-        setSources(data.sources || [])
-        setUsage(data.usage)
-      }
+      const userMsg: ChatMsg = { id: crypto.randomUUID(), role: 'user', content: trimmed }
+      setThread((t) => [...t, userMsg].slice(-50))
+      setMessage('')
+      setLoading(true)
 
-      // compteur gratuit
-      if (!isActive) bumpFreeSend()
-    } catch (e: any) {
-      setServerError(e?.message ?? 'Erreur réseau')
-    } finally {
-      setLoading(false)
-    }
-  }, [canSend, courseSlug, isActive, message, mode, profile, topK])
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: trimmed,
+            course_slug: courseSlug,
+            user_goal: userGoal,
+            top_k: 5,
+            mode: 'prod',
+            // mémoire: UI only pour l'instant
+          }),
+        })
 
-  const onKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault()
-        void send()
+        const data: ApiResponse = await res.json()
+
+        if (!res.ok) {
+          const msg = 'error' in data && data.error ? data.error : `Erreur API (${res.status})`
+          setServerError(msg)
+          return
+        }
+
+        if (!('answer' in data)) {
+          setServerError('Réponse inattendue.')
+          return
+        }
+
+        const aiMsg: ChatMsg = {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: data.answer,
+          sources: data.sources || [],
+        }
+
+        setThread((t) => {
+          const next = [...t, aiMsg]
+          if (!memoryEnabled) return [next[0], ...next.slice(-2)] // welcome + dernier échange
+          return next.slice(-50)
+        })
+      } catch (e: any) {
+        setServerError(e?.message ?? 'Erreur réseau.')
+      } finally {
+        setLoading(false)
       }
     },
-    [send]
+    [loading, isActive, courseSlug, userGoal, memoryEnabled]
   )
+
+  const visibleThread = useMemo(() => {
+    if (!memoryEnabled) return thread
+    return thread.slice(-MEMORY_WINDOW - 1) // welcome + fenêtre
+  }, [thread, memoryEnabled])
 
   return (
-    <main style={styles.main}>
-      <div style={styles.card}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+    <div className="space-y-4">
+      {/* Header of page */}
+      <div className="flex flex-col gap-3 rounded-xl2 border border-white/50 bg-white/55 p-4 shadow-soft">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 style={{ margin: 0 }}>Droitis</h1>
-            <div style={{ opacity: 0.75, marginTop: 6, fontSize: 13 }}>
-              Statut: <strong>{status}</strong>
+            <div className="text-sm font-extrabold tracking-wide text-droitis-ink2">Assistance juridique</div>
+            <div className="mt-1 text-xs text-droitis-ink/70">Réponses structurées, style examen, avec prudence sur les sources.</div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Badge>{planLabel}</Badge>
+            {!isActive && (
+              <Badge>
+                {(() => {
+                  const c = typeof window !== 'undefined' ? readFreeCount() : 0
+                  return `Quota: ${c}/${LOCK_EVERY_NTH_SEND}`
+                })()}
+              </Badge>
+            )}
+            <Link href="/case-reader" className="droitis-btn">
+              <DocIcon className="h-5 w-5" />
+              <span>Case Reader</span>
+            </Link>
+          </div>
+        </div>
+
+        {/* Context panel */}
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+          <div className="rounded-xl2 border border-droitis-stroke bg-white/55 p-4 lg:col-span-2">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-extrabold tracking-wide text-droitis-ink2">Contexte de ton cours</div>
+                <div className="mt-1 text-xs text-droitis-ink/70">
+                  Le cours améliore la précision. <span className="font-semibold">Général</span> répond quand même mais moins ciblé.
+                </div>
+              </div>
+              <Link href="/case-reader" className="droitis-btn-secondary px-3 py-2">
+                <DocIcon className="h-5 w-5" />
+                <span className="hidden sm:inline">Analyser une décision</span>
+              </Link>
             </div>
-          </div>
-          {!isActive ? <PaywallBanner /> : null}
-        </div>
 
-        {!isActive ? (
-          <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-            Mode gratuit : certaines tentatives sont verrouillées.
-            {' '}— 1 tentative sur {LOCK_EVERY_NTH_SEND} est verrouillée.
-          </div>
-        ) : null}
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="relative">
+                <label className="droitis-label">COURS</label>
+                <div className="mt-2 rounded-md border border-droitis-stroke bg-white/70 p-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={courseQuery}
+                      onChange={(e) => setCourseQuery(e.target.value)}
+                      placeholder="Rechercher un cours…"
+                      className="w-full bg-transparent text-sm outline-none"
+                    />
+                    <Chevron className="h-5 w-5 text-droitis-ink/60" />
+                  </div>
+                  <div className="mt-2 max-h-40 overflow-auto rounded-md border border-droitis-stroke bg-white/70">
+                    {filteredCourses.map((c) => (
+                      <button
+                        key={c.course_slug}
+                        type="button"
+                        onClick={() => {
+                          setCourseSlug(c.course_slug)
+                          setCourseQuery('')
+                        }}
+                        className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-white ${
+                          courseSlug === c.course_slug ? 'font-semibold' : ''
+                        }`}
+                      >
+                        <span>{c.course_title}</span>
+                        {courseSlug === c.course_slug && <span aria-hidden="true">✓</span>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
 
-        <div style={styles.formRow}>
-          <label htmlFor="courseSlug" style={styles.label}>
-            Cours (obligatoire)
-          </label>
-
-          {coursesError ? (
-            <div style={{ fontSize: 12, marginTop: 6, color: '#b00020' }}>
-              Impossible de charger la liste des cours: {coursesError}
-            </div>
-          ) : null}
-
-          <select
-            id="courseSlug"
-            value={courseSlug}
-            onChange={(e) => setCourseSlug(e.target.value)}
-            style={styles.input}
-            disabled={coursesLoading}
-          >
-            <option value="">{coursesLoading ? 'Chargement…' : 'Sélectionner un cours…'}</option>
-            {courses.map((c) => {
-              const note =
-                c.scope === 'institution_specific' && c.institution_note
-                  ? ` (uniquement ${c.institution_note})`
-                  : ''
-              return (
-                <option key={c.course_slug} value={c.course_slug}>
-                  {c.course_title}
-                  {note}
-                </option>
-              )
-            })}
-          </select>
-        </div>
-
-        <div style={styles.formRow}>
-          <label htmlFor="message" style={styles.label}>
-            Question
-          </label>
-          <textarea
-            id="message"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="Pose ta question (ex: Explique l’art. 1457 C.c.Q.)"
-            rows={6}
-            style={styles.textarea}
-          />
-          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
-            Astuce: <kbd>Ctrl/⌘</kbd> + <kbd>Enter</kbd> pour envoyer
-          </div>
-        </div>
-
-        <div style={styles.grid}>
-          <div style={styles.formCol}>
-            <label htmlFor="profile" style={styles.label}>
-              Profil (facultatif)
-            </label>
-            <input
-              id="profile"
-              type="text"
-              value={profile}
-              onChange={(e) => setProfile(e.target.value)}
-              placeholder="ex: etudiant_l1"
-              style={styles.input}
-            />
-          </div>
-
-          <div style={styles.formCol}>
-            <label htmlFor="topK" style={styles.label}>
-              top_k
-            </label>
-            <input
-              id="topK"
-              type="number"
-              min={1}
-              max={20}
-              value={topK}
-              onChange={(e) => setTopK(Number(e.target.value))}
-              style={styles.input}
-            />
-          </div>
-
-          <div style={styles.formCol}>
-            <label htmlFor="mode" style={styles.label}>
-              mode
-            </label>
-            <select id="mode" value={mode} onChange={(e) => setMode(e.target.value)} style={styles.input}>
-              <option value="default">default</option>
-              <option value="prod">prod</option>
-              <option value="dev">dev</option>
-            </select>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button
-            onClick={() => void send()}
-            disabled={!canSend}
-            style={{
-              ...styles.button,
-              opacity: canSend ? 1 : 0.6,
-              cursor: canSend ? 'pointer' : 'not-allowed',
-            }}
-          >
-            {loading ? 'Envoi…' : 'Envoyer'}
-          </button>
-          <button
-            onClick={() => {
-              setMessage('')
-              setAnswer('')
-              setSources([])
-              setServerError(null)
-              setUsage(undefined)
-            }}
-            style={styles.buttonAlt}
-          >
-            Effacer
-          </button>
-        </div>
-
-        {serverError ? (
-          <div style={styles.errorBox}>
-            <strong>Erreur</strong>
-            <div style={{ marginTop: 6 }}>{serverError}</div>
-          </div>
-        ) : null}
-
-        {answer ? (
-          <section style={{ marginTop: 18 }}>
-            <h2 style={styles.sectionTitle}>Réponse</h2>
-            <pre style={styles.answer}>{answer}</pre>
-
-            <div style={{ marginTop: 10 }}>
-              <h3 style={styles.sectionTitle}>Sources</h3>
-              {sources.length ? (
-                <ul style={{ paddingLeft: 18, marginTop: 6 }}>
-                  {sources.map((s, i) => (
-                    <li key={String(s.id ?? i)} style={{ marginBottom: 6 }}>
-                      <div style={{ fontWeight: 600 }}>{s.title || `Source ${s.id ?? i + 1}`}</div>
-                      <div style={{ opacity: 0.85 }}>{s.citation}</div>
-                      {s.url ? (
-                        <div style={{ fontSize: 12, opacity: 0.8 }}>
-                          <a href={s.url} target="_blank" rel="noreferrer">
-                            {s.url}
-                          </a>
-                        </div>
-                      ) : null}
-                    </li>
+              <div>
+                <label className="droitis-label">OBJECTIF</label>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {GOALS.map((g) => (
+                    <button
+                      key={g.key}
+                      type="button"
+                      className="droitis-chip"
+                      data-active={String(userGoal === g.key)}
+                      onClick={() => setUserGoal(g.key)}
+                    >
+                      {g.label}
+                    </button>
                   ))}
-                </ul>
-              ) : (
-                <div style={{ opacity: 0.75, marginTop: 6 }}>(aucune)</div>
-              )}
+                </div>
+
+                <div className="mt-3">
+                  <label className="droitis-label">NIVEAU (OPTIONNEL)</label>
+                  <select
+                    className="droitis-input mt-2"
+                    value={level}
+                    onChange={(e) => setLevel(e.target.value as any)}
+                  >
+                    <option value="">—</option>
+                    {LEVELS.map((l) => (
+                      <option key={l} value={l}>
+                        {l}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </div>
 
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-              usage: {usage ? JSON.stringify(usage) : '(n/a)'}
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="rounded-xl2 border border-droitis-stroke bg-white/55 p-3">
+                <Toggle
+                  checked={memoryEnabled}
+                  onChange={setMemoryEnabled}
+                  label="Mémoriser le contexte de cette conversation"
+                  description="Conserve les 12 derniers messages (6 user + 6 Droitis)"
+                />
+              </div>
+
+              <div className="flex items-center justify-between rounded-xl2 border border-droitis-stroke bg-white/55 p-3">
+                <div>
+                  <div className="text-sm font-semibold text-droitis-ink">Réinitialiser la conversation</div>
+                  <div className="mt-1 text-xs text-droitis-ink/70">Remet la discussion à zéro (UI).</div>
+                </div>
+                <button type="button" onClick={resetConversation} className="droitis-btn-secondary px-3 py-2">
+                  Reset
+                </button>
+              </div>
             </div>
-          </section>
-        ) : null}
+
+            {/* Case Reader CTA card */}
+            <div className="mt-4 rounded-xl2 border border-droitis-stroke bg-white/65 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-extrabold tracking-wide text-droitis-ink2">Analyse une décision (PDF/DOCX)</div>
+                  <div className="mt-1 text-xs text-droitis-ink/70">Génère une fiche d’examen téléchargeable.</div>
+                  <div className="mt-2 text-xs text-droitis-ink/65">IP : le document n’est pas ingéré globalement.</div>
+                </div>
+                <Link href="/case-reader" className="droitis-btn">
+                  <DocIcon className="h-5 w-5" />
+                  Ouvrir Case Reader
+                </Link>
+              </div>
+            </div>
+          </div>
+
+          {/* Right rail: status / help */}
+          <div className="rounded-xl2 border border-droitis-stroke bg-white/55 p-4">
+            <div className="text-sm font-extrabold tracking-wide text-droitis-ink2">Statut</div>
+            <div className="mt-2 space-y-2 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-droitis-ink/70">Compte</span>
+                <span className="font-semibold">{planLabel}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-droitis-ink/70">Abonnement</span>
+                <span className="font-semibold">{status ?? '—'}</span>
+              </div>
+            </div>
+
+            {!isActive && (
+              <div className="mt-4 rounded-xl2 border border-droitis-stroke bg-white/65 p-3 text-sm">
+                <div className="font-semibold">Mode gratuit</div>
+                <div className="mt-1 text-xs text-droitis-ink/70">
+                  Une requête sur {LOCK_EVERY_NTH_SEND} est verrouillée. Upsell léger toutes les 2 requêtes (Phase 5).
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 rounded-xl2 border border-droitis-stroke bg-white/65 p-3 text-sm">
+              <div className="font-semibold">Conseil</div>
+              <div className="mt-1 text-xs text-droitis-ink/70">
+                Pour une décision, utilise Case Reader (meilleure extraction + export PDF/DOCX).
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-    </main>
-  )
-}
 
-const styles: Record<string, React.CSSProperties> = {
-  main: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'flex-start',
-    justifyContent: 'center',
-    padding: 24,
-    background: '#0b1020',
-    color: '#e8eaf6',
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
-  },
-  card: {
-    width: 'min(100%, 1100px)',
-    background: 'rgba(255,255,255,0.06)',
-    border: '1px solid rgba(255,255,255,0.12)',
-    borderRadius: 14,
-    padding: 18,
-    boxShadow: '0 20px 50px rgba(0,0,0,0.35)',
-  },
-  formRow: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-    marginTop: 14,
-  },
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr 1fr',
-    gap: 12,
-    marginTop: 14,
-  },
-  formCol: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-  },
-  label: {
-    fontSize: 12,
-    opacity: 0.85,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  input: {
-    width: '100%',
-    padding: '10px 12px',
-    borderRadius: 10,
-    border: '1px solid rgba(255,255,255,0.15)',
-    background: 'rgba(0,0,0,0.25)',
-    color: '#fff',
-    outline: 'none',
-  },
-  textarea: {
-    width: '100%',
-    padding: '10px 12px',
-    borderRadius: 12,
-    border: '1px solid rgba(255,255,255,0.15)',
-    background: 'rgba(0,0,0,0.25)',
-    color: '#fff',
-    outline: 'none',
-    resize: 'vertical',
-  },
-  button: {
-    padding: '10px 14px',
-    borderRadius: 10,
-    border: 'none',
-    background: '#4f7cff',
-    color: '#fff',
-    fontWeight: 700,
-  },
-  buttonAlt: {
-    padding: '10px 14px',
-    borderRadius: 10,
-    border: '1px solid rgba(255,255,255,0.2)',
-    background: 'transparent',
-    color: '#fff',
-    fontWeight: 600,
-  },
-  answer: {
-    whiteSpace: 'pre-wrap',
-    background: 'rgba(0,0,0,0.25)',
-    border: '1px solid rgba(255,255,255,0.12)',
-    borderRadius: 12,
-    padding: 12,
-    lineHeight: 1.45,
-  },
-  sectionTitle: {
-    margin: 0,
-    fontSize: 14,
-    opacity: 0.9,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  errorBox: {
-    marginTop: 14,
-    padding: 12,
-    borderRadius: 12,
-    border: '1px solid rgba(255,0,0,0.35)',
-    background: 'rgba(255,0,0,0.08)',
-  },
-  paywall: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 14,
-    border: '1px solid rgba(255,255,255,0.14)',
-    borderRadius: 12,
-    padding: 12,
-    background: 'rgba(255,255,255,0.05)',
-  },
-  subscribeBtn: {
-    border: 'none',
-    borderRadius: 10,
-    padding: '10px 12px',
-    background: '#ffd166',
-    fontWeight: 800,
-    cursor: 'pointer',
-  },
+      {/* Conversation */}
+      <div className="rounded-xl2 border border-white/50 bg-white/55 p-4 shadow-soft">
+        <div className="max-h-[55vh] space-y-4 overflow-auto pr-1">
+          {visibleThread.map((m) => (
+            <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`droitis-bubble ${m.role === 'user' ? 'droitis-bubble-user' : 'droitis-bubble-ai'}`}>
+                <div className="whitespace-pre-wrap">{m.content}</div>
+
+                {m.role === 'assistant' && (
+                  <div className="mt-3 space-y-2">
+                    <Accordion title="Sources utilisées">
+                      {m.sources && m.sources.length > 0 ? (
+                        <ul className="list-disc pl-5">
+                          {m.sources.map((s, i) => (
+                            <li key={(s.id ?? i).toString()}>
+                              <span className="font-semibold">{s.title ?? 'Source'}</span>
+                              {s.jurisdiction ? <span className="text-droitis-ink/70"> — {s.jurisdiction}</span> : null}
+                              {s.citation ? <span className="text-droitis-ink/70"> — {s.citation}</span> : null}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <div className="text-sm text-droitis-ink/75">
+                          Aucune source structurée n’a été fournie par le serveur pour cette réponse.
+                        </div>
+                      )}
+                    </Accordion>
+
+                    <Accordion title="Limites / À vérifier">
+                      <ul className="list-disc pl-5 text-sm">
+                        <li>Vérifie les articles/citations exacts dans le recueil applicable (QC/CA selon ton cours).</li>
+                        <li>Si tu as un extrait de décision ou d’énoncé, colle-le pour une réponse plus précise.</li>
+                        <li>Je peux me tromper sur les détails factuels si le contexte est incomplet.</li>
+                      </ul>
+                    </Accordion>
+
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {buildFollowUps().map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          className="droitis-chip"
+                          onClick={() => setMessage((prev) => (prev ? prev + '\n' + s : s))}
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {loading && (
+            <div className="flex justify-start">
+              <div className="droitis-bubble droitis-bubble-ai">
+                <div className="text-sm font-semibold text-droitis-ink">Droitis réfléchit…</div>
+              </div>
+            </div>
+          )}
+
+          {serverError && (
+            <div className="rounded-xl2 border border-droitis-stroke bg-white/65 p-3 text-sm">
+              <div className="font-semibold text-droitis-ink">Erreur</div>
+              <div className="mt-1 text-droitis-ink/80">{serverError}</div>
+              <div className="mt-3 flex items-center gap-2">
+                <button type="button" className="droitis-btn-secondary px-3 py-2" onClick={() => send(message)}>
+                  Réessayer
+                </button>
+                <div className="text-xs text-droitis-ink/70">
+                  Si ça time-out, réduis l’extrait ou envoie une question plus ciblée.
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Composer */}
+        <div className="mt-4 border-t border-white/50 pt-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="flex-1">
+              <label className="droitis-label">MESSAGE</label>
+              <textarea
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder="Ex: Explique la différence entre obligation de moyens et de résultat, avec un mini plan d’examen."
+                rows={3}
+                className="droitis-input mt-2 min-h-[92px] resize-y"
+              />
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Link href="/case-reader" className="droitis-btn-secondary px-3 py-2">
+                  <DocIcon className="h-5 w-5" />
+                  Analyser une décision
+                </Link>
+                <button
+                  type="button"
+                  className="droitis-btn-secondary px-3 py-2"
+                  onClick={() => setMessage((p) => (p ? p + '\n\n[Extrait]\n' : '[Extrait]\n'))}
+                >
+                  Joindre un extrait
+                </button>
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button type="button" className="droitis-btn" disabled={loading} onClick={() => send(message)}>
+                Envoyer
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
