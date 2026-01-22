@@ -1,6 +1,8 @@
 /* eslint-disable no-console */
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
+import { createClient as createUserClient } from "@/lib/supabase/server";
 import { senseRouter } from "@/lib/senseRouter";
 import { getCourseProfile, expandQueryWithProfile, courseContext } from "@/lib/courseProfiles";
 
@@ -1313,16 +1315,36 @@ function courseJurisdictionLock(profileObj: any): Jurisdiction | null {
   if (j === "OTHER") return "OTHER";
   return null;
 }
+// ------------------------------
+// CodeId normalization helpers
+// ------------------------------
+function normCodeIdStrict(codeId: string | null | undefined): string {
+  // strict: conserve ponctuation, mais normalise casse/espaces
+  return String(codeId ?? "").trim().toLowerCase();
+}
+
+function normCodeIdLoose(codeId: string | null | undefined): string {
+  // loose: enlève ponctuation (CCQ == C.c.Q.)
+  return String(codeId ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+
 
 // ------------------------------
 // Mapping helpers (course laws) — RLS safe
 // ------------------------------
-function normCodeId(codeId: string | null | undefined): string {
-  return String(codeId ?? "").trim().toLowerCase();
-}
+async function getCourseCanonicalCodes(
+  supabase: ReturnType<typeof createClient>,
+  course_slug: string
+): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("course_law_requirements")
+    .select("canonical_code_id")
+    .eq("course_slug", course_slug);
 
-async function getCourseCanonicalCodes(supabase: ReturnType<typeof createClient>, course_slug: string): Promise<string[]> {
-  const { data, error } = await supabase.from("course_law_requirements").select("canonical_code_id").eq("course_slug", course_slug);
   if (error) throw new Error(`getCourseCanonicalCodes failed: ${error.message}`);
 
   const uniq = new Set<string>();
@@ -1332,25 +1354,45 @@ async function getCourseCanonicalCodes(supabase: ReturnType<typeof createClient>
   }
   return Array.from(uniq);
 }
+type CodeIdSets = { strict: Set<string>; loose: Set<string> };
 
-async function expandAliases(supabase: ReturnType<typeof createClient>, canonicalCodes: string[]): Promise<Set<string>> {
-  const out = new Set<string>();
-  for (const c of canonicalCodes) out.add(normCodeId(c));
-  if (!canonicalCodes.length) return out;
+async function expandAliases(
+  supabase: ReturnType<typeof createClient>,
+  canonicalCodes: string[]
+): Promise<CodeIdSets> {
+  const strict = new Set<string>();
+  const loose = new Set<string>();
 
-  const { data, error } = await supabase.from("code_aliases").select("canonical_code,aliases").in("canonical_code", canonicalCodes);
-  if (error) return out;
+  const addBoth = (v: string | null | undefined) => {
+    const raw = String(v ?? "").trim();
+    if (!raw) return;
+    strict.add(normCodeIdStrict(raw));
+    loose.add(normCodeIdLoose(raw));
+  };
 
-  for (const row of data ?? []) {
-    const c = (row as any).canonical_code;
-    if (typeof c === "string" && c.trim()) out.add(normCodeId(c));
-    const aliases = (row as any).aliases;
+  // inclure les codes fournis (canon) en strict+loose
+  for (const c of canonicalCodes ?? []) addBoth(c);
+
+  if (!canonicalCodes?.length) return { strict, loose };
+
+  const { data, error } = await supabase
+    .from("code_aliases")
+    .select("canonical_code,aliases")
+    .in("canonical_code", canonicalCodes);
+
+  if (error || !data) return { strict, loose };
+
+  for (const row of data as any[]) {
+    addBoth(row?.canonical_code);
+    const aliases = row?.aliases;
     if (Array.isArray(aliases)) {
-      for (const a of aliases) if (typeof a === "string" && a.trim()) out.add(normCodeId(a));
+      for (const a of aliases) addBoth(a);
     }
   }
-  return out;
+
+  return { strict, loose };
 }
+
 
 async function getIngestNeededForCourse(supabase: ReturnType<typeof createClient>, course_slug: string): Promise<string[]> {
   const { data, error } = await supabase.from("course_law_requirements").select("law_key,canonical_code_id,status").eq("course_slug", course_slug);
@@ -1802,12 +1844,93 @@ function buildUserPayloadText(userPayload: unknown[] | string): string {
     return s ? (acc ? acc + "\n" + s : s) : acc;
   }, "");
 }
+async function directArticleLookup(args: {
+  supabase: ReturnType<typeof createClient>;
+  articleNum: string;
+  codeCandidates: string[]; // canon (mapping) ou vide
+  jurisdictionNorm: string | null; // ex "QC" ou null
+}): Promise<HybridHit[]> {
+  const { supabase, articleNum, codeCandidates, jurisdictionNorm } = args;
+
+
+// 1) Expand canon -> aliases (strict + loose)
+const allowed =
+  codeCandidates?.length > 0
+    ? await expandAliases(supabase, codeCandidates)
+    : { strict: new Set<string>(), loose: new Set<string>() };
+
+
+  // 2) On tente 2 passes:
+  //    - pass A: match strict (code_id exact-ish)
+  //    - pass B: match loose (en enlevant ponctuation côté client)
+type LegalVectorRow = {
+  id: number;
+  code_id: string | null;
+  citation: string | null;
+  title: string | null;
+  text: string | null;
+  jurisdiction: string | null;
+  jurisdiction_bucket: string | null;
+};
+
+// 2) Fetch candidates by citation match (fast path)
+const { data, error } = await supabase
+  .from("legal_vectors")
+  .select("id,code_id,citation,title,text,jurisdiction,jurisdiction_bucket")
+  .ilike("citation", `%${articleNum}%`)
+  .limit(20);
+
+if (error || !data) return [];
+
+const rows = (data as LegalVectorRow[]).filter((r) => {
+  // Jurisdiction filter
+  if (jurisdictionNorm && String(r.jurisdiction ?? "").toUpperCase() !== jurisdictionNorm.toUpperCase()) {
+    return false;
+  }
+
+  // If no code constraints, accept (article+juri already filtered)
+  if (allowed.strict.size === 0 && allowed.loose.size === 0) return true;
+
+  const codeId = String(r.code_id ?? "");
+  const codeStrict = normCodeIdStrict(codeId);
+  const codeLoose = normCodeIdLoose(codeId);
+
+  // O(1) strict/loose match
+  return allowed.strict.has(codeStrict) || allowed.loose.has(codeLoose);
+});
+
+
+  // 3) Mapper vers HybridHit complet (champs requis)
+  return rows.map((r) => ({
+    id: String(r.id),
+    code_id: String(r.code_id ?? ""),
+    citation: String(r.citation ?? ""),
+    title: String(r.title ?? ""),
+    text: String(r.text ?? ""),
+    jurisdiction: String(r.jurisdiction ?? ""),
+    jurisdiction_bucket: String(r.jurisdiction_bucket ?? ""),
+
+    // Champs exigés par EnrichedRow/HybridHit (complétés ici)
+    jurisdiction_norm: String(r.jurisdiction ?? "").toUpperCase(),
+    code_id_struct: null,
+    article_num: String(articleNum),
+    url_struct: null,
+
+    // Ranks (direct lookup = priorité)
+    fts_rank: 999,
+    semantic_rank: 999,
+    similarity: 1,
+  })) as any;
+}
 
 // ------------------------------
 // POST
 // ------------------------------
 export async function POST(req: Request) {
   const supabaseAuth = createClient();
+  const supabaseAdmin = createServiceClient();
+  const supabaseUser = createUserClient(); // si tu en as besoin ailleurs
+
   const {
     data: { user },
   } = await supabaseAuth.auth.getUser();
@@ -1853,6 +1976,8 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+const artMatch = message.match(/\b(?:art\.?|article)\s*([0-9]{1,5})\b/i);
+const articleNum = artMatch?.[1] ?? null;
 
     const course_slug =
       typeof body.course_slug === "string" && body.course_slug.trim() ? body.course_slug.trim() : "general";
@@ -2049,6 +2174,32 @@ export async function POST(req: Request) {
     }
 
     // ------------------------------
+// Direct article lookup (priority if user explicitly asks an article number)
+// ------------------------------
+if (articleNum) {
+  try {
+    let codeCandidates: string[] = [];
+    if (course_slug && course_slug !== "general") {
+      const canon = await getCourseCanonicalCodes(supabaseAuth, course_slug);
+      codeCandidates = canon;
+    }
+
+    const directHits = await directArticleLookup({
+      supabase: supabaseAuth,
+      articleNum,
+      codeCandidates,
+      jurisdictionNorm: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
+    });
+
+    if (directHits.length) {
+      hybridHits = [...directHits, ...(hybridHits ?? [])];
+    }
+  } catch (e: any) {
+    console.warn("directArticleLookup error:", e?.message ?? e);
+  }
+}
+
+    // ------------------------------
     // Strict article lock: if explicit “1457 CCQ/LPC”, avoid “noise” sources
     // ------------------------------
     const explicitRef = detectExplicitArticleRef(message);
@@ -2065,21 +2216,25 @@ export async function POST(req: Request) {
     // ------------------------------
     // Course law mapping: restrict sources to required codes (STRICT)
     // ------------------------------
-    let _allowedCodeIds: Set<string> | null = null;
+    let _allowedCodeIds: { strict: Set<string>; loose: Set<string> } | null = null;
     let _ingestNeeded: string[] = [];
     try {
       if (course_slug && course_slug !== "general") {
-        const canon = await getCourseCanonicalCodes(supabaseAuth, course_slug);
-        _allowedCodeIds = await expandAliases(supabaseAuth, canon);
-        _ingestNeeded = await getIngestNeededForCourse(supabaseAuth, course_slug);
-      }
+  const canon = await getCourseCanonicalCodes(supabaseAuth, course_slug);
+  _allowedCodeIds = await expandAliases(supabaseAuth, canon);
+  _ingestNeeded = await getIngestNeededForCourse(supabaseAuth, course_slug);
+}
     } catch (e: any) {
       console.warn("course mapping fetch failed:", e?.message ?? e);
     }
 
-    if (_allowedCodeIds && _allowedCodeIds.size) {
-      hybridHits = (hybridHits ?? []).filter((h) => _allowedCodeIds!.has(normCodeId(h.code_id)));
-    }
+    if (_allowedCodeIds && (_allowedCodeIds.strict.size || _allowedCodeIds.loose.size)) {
+    hybridHits = (hybridHits ?? []).filter((h) => {
+    const vStrict = normCodeIdStrict(h.code_id);
+    const vLoose = normCodeIdLoose(h.code_id);
+    return _allowedCodeIds!.strict.has(vStrict) || _allowedCodeIds!.loose.has(vLoose);
+  });
+}
 
     // ------------------------------
     // Distinctions (internal)
@@ -2652,5 +2807,5 @@ RÈGLES:
   } catch (e: any) {
     console.error("chat route error:", e);
     return json({ error: e?.message ?? "Unknown error" }, 500);
+    }
   }
-}
