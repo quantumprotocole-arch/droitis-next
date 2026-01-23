@@ -2878,7 +2878,12 @@ RÈGLES:
       mode: mode === "prod" ? "prod" : "dev",
     });
 
-    if (mode === "prod") {
+    // ✅ Build fix (Next.js Route Handlers): ne jamais "return" une string depuis POST.
+// En prod on peut filtrer/adapter le texte, mais on retourne toujours une Response (json()).
+if (mode === "prod") {
+  answer = stripSourcesSectionForUser(answer);
+}
+ {
   const body = (parsed1.answer_markdown ?? "").trim();
 
   const followups = (parsed1.followups ?? []).slice(0, 3).filter((x) => typeof x === "string" && x.trim());
