@@ -105,6 +105,12 @@ function json(data: any, init?: number | ResponseInit) {
   });
 }
 
+
+function stripSourcesSectionForUser(text: string): string {
+  // Supprime sections "Sources" / "Sources citées" jusqu'à la fin (côté client en prod)
+  return (text ?? "").replace(/\n\*\*Sources[\s\S]*$/i, "").trim();
+}
+
 export async function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS_HEADERS });
 }
@@ -1734,25 +1740,8 @@ function renderAnswer(args: {
 }): string {
   const { parsed, sources, serverWarning, examTip, mode } = args;
 
-  // PROD: réponse fluide + sources (optionnel)
-  if (mode === "prod") {
-    const body = (parsed.answer_markdown ?? "").trim();
+  
 
-    const followups = (parsed.followups ?? []).slice(0, 3).filter((x) => typeof x === "string" && x.trim());
-
-    const sourcesLines = (parsed.source_ids_used ?? [])
-      .map((id) => sources.find((s) => String(s.id) === String(id))?.citation)
-      .filter(Boolean)
-      .map((c) => `- ${c}`)
-      .join("\n");
-
-    return [
-      body || (parsed.ilac ? parsed.ilac.conclusion : "Je te réponds au mieux avec le corpus actuel."),
-      followups.length ? `\n\n**Si tu veux, je peux :**\n${followups.map((f) => `- ${f}`).join("\n")}` : "",
-    ]
-      .filter(Boolean)
-      .join("");
-  }
 
   // DEV: on peut afficher blocks missing/ingest
   const missingBlock =
@@ -2010,7 +1999,7 @@ const rows = (data as LegalVectorRow[]).filter((r) => {
 // ------------------------------
 // POST
 // ------------------------------
-export async function POST(req: Request) {
+export async function POST(req: Request): Promise<Response> {
   const supabaseAuth = createClient();
   const supabaseAdmin = createServiceClient();
   const supabaseUser = createUserClient(); // si tu en as besoin ailleurs
@@ -2018,10 +2007,6 @@ export async function POST(req: Request) {
   const {
     data: { user },
   } = await supabaseAuth.auth.getUser();
-function stripSourcesSectionForUser(text: string): string {
-  // Supprime sections "Sources" / "Sources citées" jusqu'à fin
-  return text.replace(/\n\*\*Sources[\s\S]*$/i, "").trim();
-}
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
@@ -2264,6 +2249,9 @@ const articleNum = artMatch?.[1] ?? null;
     // ------------------------------
 // Direct article lookup (priority if user explicitly asks an article number)
 // ------------------------------
+// ------------------------------
+// Direct article lookup (priority if user explicitly asks an article number)
+// ------------------------------
 if (articleNum) {
   try {
     let codeCandidates: string[] = [];
@@ -2272,28 +2260,25 @@ if (articleNum) {
       codeCandidates = canon;
     }
 
-  let directHits = await directArticleLookup({
-  supabase: supabaseAuth,
-  articleNum,
-  codeCandidates,
-  jurisdictionNorm: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
-});
+    // ✅ 1) Déclare directHits UNE fois, en let
+    let directHits = await directArticleLookup({
+      supabase: supabaseAuth,
+      articleNum,
+      codeCandidates,
+      jurisdictionNorm: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
+    });
 
-// Fallback: si le mapping était trop strict, on relance sans codeCandidates
-if (!directHits.length && (codeCandidates?.length ?? 0) > 0) {
-  directHits = await directArticleLookup({
-    supabase: supabaseAuth,
-    articleNum,
-    codeCandidates: [],
-    jurisdictionNorm: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
-  });
-}
+    // ✅ 2) Fallback: si mapping trop strict, relance sans contraintes
+    if (!directHits.length && (codeCandidates?.length ?? 0) > 0) {
+      directHits = await directArticleLookup({
+        supabase: supabaseAuth,
+        articleNum,
+        codeCandidates: [],
+        jurisdictionNorm: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
+      });
+    }
 
-if (directHits.length) {
-  hybridHits = [...directHits, ...(hybridHits ?? [])];
-}
-
-
+    // ✅ 3) Merge si hits
     if (directHits.length) {
       hybridHits = [...directHits, ...(hybridHits ?? [])];
     }
@@ -2301,6 +2286,7 @@ if (directHits.length) {
     console.warn("directArticleLookup error:", e?.message ?? e);
   }
 }
+
 
     // ------------------------------
     // Strict article lock: if explicit “1457 CCQ/LPC”, avoid “noise” sources
@@ -2806,17 +2792,20 @@ RÈGLES:
     }
 
     // redactions anti-hallucination
-    let redactions: string[] = [];
-    {
-      const p1 = redactUnsupportedRefs(parsedObj.ilac.probleme ?? "", allowedCitationsLower);
-      const p2 = redactUnsupportedRefs(parsedObj.ilac.regle ?? "", allowedCitationsLower);
-      const p3 = redactUnsupportedRefs(parsedObj.ilac.application ?? "", allowedCitationsLower);
-      const p4 = redactUnsupportedRefs(parsedObj.ilac.conclusion ?? "", allowedCitationsLower);
-      parsedObj.ilac.probleme = p1.text;
-      parsedObj.ilac.regle = p2.text;
-      parsedObj.ilac.application = p3.text;
-      parsedObj.ilac.conclusion = p4.text;
-      redactions = [...p1.redactions, ...p2.redactions, ...p3.redactions, ...p4.redactions];
+// redactions anti-hallucination
+let redactions: string[] = [];
+{
+  const p1 = redactUnsupportedRefs(parsedObj.ilac.probleme ?? "", allowedCitationsLower);
+  const p2 = redactUnsupportedRefs(parsedObj.ilac.regle ?? "", allowedCitationsLower);
+  const p3 = redactUnsupportedRefs(parsedObj.ilac.application ?? "", allowedCitationsLower);
+  const p4 = redactUnsupportedRefs(parsedObj.ilac.conclusion ?? "", allowedCitationsLower);
+
+  parsedObj.ilac.probleme = p1.text;
+  parsedObj.ilac.regle = p2.text;
+  parsedObj.ilac.application = p3.text;
+  parsedObj.ilac.conclusion = p4.text;
+
+  redactions = [...p1.redactions, ...p2.redactions, ...p3.redactions, ...p4.redactions];
 
       if (redactions.length) {
         parsedObj.partial = true;
@@ -2830,103 +2819,151 @@ RÈGLES:
       }
     }
 
-    // wrong regime leak (work)
-    const leak =
-      hasForbiddenRegimeLeak({ text: parsedObj.ilac.probleme, domain: domain_detected, jurisdiction: jurisdiction_selected }) ||
-      hasForbiddenRegimeLeak({ text: parsedObj.ilac.regle, domain: domain_detected, jurisdiction: jurisdiction_selected }) ||
-      hasForbiddenRegimeLeak({ text: parsedObj.ilac.application, domain: domain_detected, jurisdiction: jurisdiction_selected }) ||
-      hasForbiddenRegimeLeak({ text: parsedObj.ilac.conclusion, domain: domain_detected, jurisdiction: jurisdiction_selected });
+// ------------------------------
+// Post-processing (anti-hallucination + wrong-regime leak + render)
+// ------------------------------
 
-    if (leak) {
-      parsedObj.partial = true;
-      parsedObj.warning = (parsedObj.warning ? parsedObj.warning + " " : "") + "Incohérence de régime détectée; correction serveur.";
-      parsedObj.missing_coverage = Array.from(new Set([...(parsedObj.missing_coverage ?? []), "Incohérence: le texte mentionnait un régime juridique d’une autre juridiction."]));
-      parsedObj.ingest_needed = Array.from(new Set([...(parsedObj.ingest_needed ?? []), "Ajouter au corpus les textes du régime applicable (dans la juridiction retenue) pour éviter tout recours au mauvais régime."]));
-      parsedObj.ilac = buildServerIlacFallback({
-        message,
-        domain: domain_detected,
-        jurisdiction: jurisdiction_selected,
-        gate,
-        cov: { missing_coverage: parsedObj.missing_coverage ?? [], ingest_needed: parsedObj.ingest_needed ?? [] },
-      });
-    }
+// 1) Si redactions => enrichit missing/ingest + warning
+if (redactions.length) {
+  parsedObj.partial = true;
 
-    if (serverWarning && parsedObj.type === "answer") {
-      parsedObj.warning = parsedObj.warning ? `${serverWarning} ${parsedObj.warning}` : serverWarning;
-      if (rag_quality <= 2) parsedObj.partial = parsedObj.partial ?? true;
-    }
+  parsedObj.missing_coverage = Array.from(
+    new Set([
+      ...(parsedObj.missing_coverage ?? []),
+      ...redactions.map((x) => `Référence non supportée par l’allowlist: ${x}`),
+    ])
+  );
 
-    // followups safe
-    followups = Array.isArray(parsedObj.followups)
-      ? parsedObj.followups.filter((x) => typeof x === "string" && x.trim()).slice(0, 3)
-      : [];
-    if (followups.length === 0) {
-      followups = [
-        "Si tu veux, je peux l’appliquer à un mini-cas (2–3 phrases).",
-        "Si tu veux, je peux te faire une checklist d’examen + pièges.",
-        "Si tu veux, je peux te dire exactement quoi ingérer pour citer précisément.",
-      ];
-    }
+  parsedObj.ingest_needed = Array.from(
+    new Set([
+      ...(parsedObj.ingest_needed ?? []),
+      "Ajouter au corpus la source officielle correspondant aux références manquantes, ou retirer la demande de citation précise.",
+    ])
+  );
 
-    // render
-    let answer = renderAnswer({
-      parsed: parsedObj,
-      sources,
-      distinctions: distinctions ?? [],
-      serverWarning,
-      examTip: null,
-      mode: mode === "prod" ? "prod" : "dev",
-    });
+  parsedObj.warning =
+    (parsedObj.warning ? parsedObj.warning + " " : "") +
+    "Certaines références non supportées ont été redigées (anti-hallucination).";
+}
 
-    // ✅ Build fix (Next.js Route Handlers): ne jamais "return" une string depuis POST.
-// En prod on peut filtrer/adapter le texte, mais on retourne toujours une Response (json()).
+// 2) Wrong regime leak (Travail QC vs Fédéral)
+const leak =
+  hasForbiddenRegimeLeak({
+    text: parsedObj.ilac?.probleme ?? "",
+    domain: domain_detected,
+    jurisdiction: jurisdiction_selected,
+  }) ||
+  hasForbiddenRegimeLeak({
+    text: parsedObj.ilac?.regle ?? "",
+    domain: domain_detected,
+    jurisdiction: jurisdiction_selected,
+  }) ||
+  hasForbiddenRegimeLeak({
+    text: parsedObj.ilac?.application ?? "",
+    domain: domain_detected,
+    jurisdiction: jurisdiction_selected,
+  }) ||
+  hasForbiddenRegimeLeak({
+    text: parsedObj.ilac?.conclusion ?? "",
+    domain: domain_detected,
+    jurisdiction: jurisdiction_selected,
+  });
+
+if (leak) {
+  parsedObj.partial = true;
+  parsedObj.warning =
+    (parsedObj.warning ? parsedObj.warning + " " : "") +
+    "Incohérence de régime détectée; correction serveur.";
+
+  parsedObj.missing_coverage = Array.from(
+    new Set([
+      ...(parsedObj.missing_coverage ?? []),
+      "Incohérence: le texte mentionnait un régime juridique d’une autre juridiction.",
+    ])
+  );
+
+  parsedObj.ingest_needed = Array.from(
+    new Set([
+      ...(parsedObj.ingest_needed ?? []),
+      "Ajouter au corpus les textes du régime applicable (dans la juridiction retenue) pour éviter tout recours au mauvais régime.",
+    ])
+  );
+
+  // ✅ IMPORTANT: pas de shorthand si ton scope a déjà été cassé auparavant;
+  // ici, on force les paires clé:valeur (et on protège cov)
+  parsedObj.ilac = buildServerIlacFallback({
+    message: message,
+    domain: domain_detected,
+    jurisdiction: jurisdiction_selected,
+    gate: gate,
+    cov: {
+      missing_coverage: parsedObj.missing_coverage ?? cov?.missing_coverage ?? [],
+      ingest_needed: parsedObj.ingest_needed ?? cov?.ingest_needed ?? [],
+    },
+  });
+}
+
+// 3) Warning policy (graduée)
+if (serverWarning && parsedObj.type === "answer") {
+  parsedObj.warning = parsedObj.warning ? `${serverWarning} ${parsedObj.warning}` : serverWarning;
+  if (rag_quality <= 2) parsedObj.partial = parsedObj.partial ?? true;
+}
+
+// 4) followups safe
+followups = Array.isArray(parsedObj.followups)
+  ? parsedObj.followups.filter((x) => typeof x === "string" && x.trim()).slice(0, 3)
+  : [];
+
+if (followups.length === 0) {
+  followups = [
+    "Si tu veux, je peux l’appliquer à un mini-cas (2–3 phrases).",
+    "Si tu veux, je peux te faire une checklist d’examen + pièges.",
+    "Si tu veux, je peux te dire exactement quoi ingérer pour citer précisément.",
+  ];
+}
+
+// 5) render
+let answer = renderAnswer({
+  parsed: parsedObj,
+  sources: sources,
+  distinctions: distinctions ?? [],
+  serverWarning: serverWarning,
+  examTip: null,
+  mode: mode === "prod" ? "prod" : "dev",
+});
+
+// ✅ En prod, on masque la section Sources côté client
 if (mode === "prod") {
   answer = stripSourcesSectionForUser(answer);
 }
- {
-  const body = (parsed1.answer_markdown ?? "").trim();
 
-  const followups = (parsed1.followups ?? []).slice(0, 3).filter((x) => typeof x === "string" && x.trim());
+const had_qc_source = sources.some((s) => normalizeJurisdiction(s.jur ?? "") === "QC");
 
-  // On garde sourcesLines pour logs internes si tu veux,
-  // mais on ne les affiche plus au client.
-  // const sourcesLines = ...
+return json({
+  answer,
+  sources,
+  followups,
+  usage: {
+    type: parsedObj.type,
+    goal_mode: gmode,
+    domain_detected,
+    jurisdiction_expected,
+    jurisdiction_selected,
+    jurisdiction_lock: gate.lock,
+    rag_quality,
+    relevance_ok,
+    coverage_ok,
+    had_qc_source,
+    missing_coverage: parsedObj.missing_coverage ?? cov.missing_coverage ?? [],
+    ingest_needed: parsedObj.ingest_needed ?? cov.ingest_needed ?? [],
+    distinctions_count: distinctions.length,
+    kernels_count: kernelHits.length,
+    hybrid_error: hybridError,
+  },
+});
 
-  return [
-    body || (parsed1.ilac ? parsed1.ilac.conclusion : "Je te réponds au mieux avec le corpus actuel."),
-    followups.length ? `\n\n**Si tu veux, je peux :**\n${followups.map((f) => `- ${f}`).join("\n")}` : "",
-  ]
-    .filter(Boolean)
-    .join("");
+} catch (e: any) {
+  console.error("chat route error:", e);
+  return json({ error: e?.message ?? "Unknown error" }, 500);
 }
-
-
-    const had_qc_source = sources.some((s) => normalizeJurisdiction(s.jur ?? "") === "QC");
-
-    return json({
-      answer,
-      sources,
-      followups,
-      usage: {
-        type: parsedObj.type,
-        goal_mode: gmode,
-        domain_detected,
-        jurisdiction_expected,
-        jurisdiction_selected,
-        jurisdiction_lock: gate.lock,
-        rag_quality,
-        relevance_ok,
-        coverage_ok,
-        had_qc_source,
-        missing_coverage: parsedObj.missing_coverage ?? cov.missing_coverage ?? [],
-        ingest_needed: parsedObj.ingest_needed ?? cov.ingest_needed ?? [],
-        distinctions_count: distinctions.length,
-        kernels_count: kernelHits.length,
-        hybrid_error: hybridError,
-      },
-    });
-  } catch (e: any) {
-    console.error("chat route error:", e);
-    return json({ error: e?.message ?? "Unknown error" }, 500);
-    }
-  }
+}
