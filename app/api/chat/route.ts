@@ -522,7 +522,10 @@ function detectJurisdictionExpected(
 
   if (domain === "Penal") {
     if (hasQcProvPenalSignals(message)) return { selected: "QC", reason: "penal_provincial_qc", lock: true };
-    if (hasPenalSignals(message)) return { selected: "CA-FED", reason: "penal_substantive_fed", lock: true };
+    // ne verrouille CA-FED que si signal pénal FORT
+    const penalFedStrong = /\b(code criminel|criminal code|procureur|dpcp|mise en accusation|acte criminel|sommaire)\b/i.test(message);
+    if (penalFedStrong) return { selected: "CA-FED", reason: "penal_substantive_fed_strong", lock: true };
+
     return { selected: defaultJurisdictionByDomain(domain), reason: "penal_default_majority", lock: false };
   }
 
@@ -573,7 +576,10 @@ function jurisdictionGateNoBlock(message: string, domain: Domain): Gate {
 function detectDomain(message: string): Domain {
   const s = message.toLowerCase();
 
-  if (hasPenalSignals(message) || hasQcProvPenalSignals(message)) return "Penal";
+    // Penal seulement sur signaux forts (évite faux positifs)
+  const penalStrong = /\b(code criminel|criminal code|dpcp|accusation|infraction|mandat|perquisition|arrestation|mise en accusation|mens rea|actus reus)\b/i.test(message);
+  if (penalStrong || hasQcProvPenalSignals(message)) return "Penal";
+
   if (hasHealthSignals(message)) return "Sante";
 
   const fiscal = [
@@ -1427,6 +1433,63 @@ async function fetchTopDistinctions(
   if (error) return [];
   return (data ?? []) as any;
 }
+// ------------------------------
+// Allowlist v2: validation par "signature" (numéro + code loose)
+// ------------------------------
+function extractArticleSignaturesFromSources(
+  sources: Array<{ citation?: string | null; title?: string | null }>
+): Set<string> {
+  const sigs = new Set<string>();
+
+  const toLooseCode = (s: string) =>
+    s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+  for (const src of sources ?? []) {
+    const c = String(src?.citation ?? "").toLowerCase();
+
+    // capture: "art. 1457 C.c.Q." / "article 58 L.P.C." / "s. 17 RSC 1985..."
+    const m = c.match(/\b(?:art\.?|article|s\.|section)\s*([0-9]{1,5}(?:\.[0-9]+)?)\b/g);
+    if (!m) continue;
+
+    // essaie d'inférer un "code" depuis la citation (tout ce qui suit le numéro)
+    // ex: "art. 1457 c.c.q." => codePart ~ "c.c.q."
+    for (const hit of m) {
+      const num = hit.match(/([0-9]{1,5}(?:\.[0-9]+)?)/)?.[1];
+      if (!num) continue;
+
+      // code part: prend ce qui suit le numéro dans la citation globale
+      const idx = c.indexOf(num);
+      const tail = idx >= 0 ? c.slice(idx + num.length) : "";
+      const codeGuess = toLooseCode(tail).slice(0, 24); // borné
+
+      // deux signatures: "num|codeGuess" + "num|*" (fallback)
+      sigs.add(`${num}|${codeGuess}`);
+      sigs.add(`${num}|*`);
+    }
+  }
+
+  return sigs;
+}
+
+function extractUserRequestedArticleRefs(text: string): Array<{ num: string; codeLoose: string | "*" }> {
+  const s = text.toLowerCase();
+
+  // capture "article 1457", "art. 1457", etc.
+  const re = /\b(?:art\.?|article)\s*([0-9]{1,5}(?:\.[0-9]+)?)\b([^\n\r]{0,40})?/g;
+  const refs: Array<{ num: string; codeLoose: string | "*" }> = [];
+  let m: RegExpExecArray | null;
+
+  const toLoose = (x: string) => x.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+  while ((m = re.exec(s)) !== null) {
+    const num = m[1];
+    const tail = m[2] ?? "";
+    const codeLoose = toLoose(tail).slice(0, 24);
+    refs.push({ num, codeLoose: codeLoose || "*" });
+  }
+
+  return refs;
+}
 
 // ------------------------------
 // Prompt + output checks
@@ -1589,28 +1652,50 @@ function buildAllowedCitationText(sources: Source[]): string {
   return Array.from(uniq).join(" | ");
 }
 
-function redactUnsupportedRefs(text: string, allowedCitationsLower: string): { text: string; redactions: string[] } {
+function redactUnsupportedRefs(
+  text: string,
+  allowedCitationsLower: string
+): { text: string; redactions: string[] } {
   let out = text ?? "";
   const redactions: string[] = [];
 
-  const artRe = /\b(?:art\.?|article)\s*([0-9]{1,5})\b/gi;
-  out = out.replace(artRe, (m) => {
-    const ml = m.toLowerCase();
-    if (allowedCitationsLower.includes(ml)) return m;
+  // 1) Construit un set des numéros d’articles réellement présents dans les citations autorisées
+  //    → évite le faux négatif "article 1457" vs "art. 1457 C.c.Q."
+  const allowedArticleNums = new Set<string>();
+  {
+    const re = /\b(?:art\.?|article|s\.|section)\s*([0-9]{1,5}(?:\.[0-9]+)?)\b/gi;
+    let m: RegExpExecArray | null;
+    const s = allowedCitationsLower ?? "";
+    while ((m = re.exec(s)) !== null) {
+      if (m[1]) allowedArticleNums.add(m[1]);
+    }
+  }
+
+  // 2) Redaction des références d’articles
+  const artRe = /\b(?:art\.?|article)\s*([0-9]{1,5}(?:\.[0-9]+)?)\b/gi;
+  out = out.replace(artRe, (m, num) => {
+    const ml = String(m).toLowerCase();
+    // a) match exact si la citation contient littéralement "article 1457"
+    if ((allowedCitationsLower ?? "").includes(ml)) return m;
+    // b) match robuste si le NUMÉRO existe quelque part dans les citations (ex: "art. 1457 C.c.Q.")
+    if (num && allowedArticleNums.has(String(num))) return m;
+
     redactions.push(m);
     return "article [non supporté par le corpus]";
   });
 
+  // 3) Redaction des références jurisprudentielles (inchangé)
   const caseRe = /\b(19\d{2}|20\d{2})\s*(CSC|SCC|QCCA|QCCS|QCCQ|BCCA|ONCA|FCA|CAF)\s*([0-9]{1,6})\b/gi;
   out = out.replace(caseRe, (m) => {
     const ml = m.toLowerCase();
-    if (allowedCitationsLower.includes(ml)) return m;
+    if ((allowedCitationsLower ?? "").includes(ml)) return m;
     redactions.push(m);
-    return "[décision non supportée par le corpus]";
+    return "[référence non supportée par le corpus]";
   });
 
   return { text: out, redactions };
 }
+
 
 function buildServerIlacFallback(args: {
   message: string;
@@ -1664,7 +1749,6 @@ function renderAnswer(args: {
     return [
       body || (parsed.ilac ? parsed.ilac.conclusion : "Je te réponds au mieux avec le corpus actuel."),
       followups.length ? `\n\n**Si tu veux, je peux :**\n${followups.map((f) => `- ${f}`).join("\n")}` : "",
-      sourcesLines ? `\n\n**Sources (corpus)**\n${sourcesLines}` : "",
     ]
       .filter(Boolean)
       .join("");
@@ -1934,13 +2018,17 @@ export async function POST(req: Request) {
   const {
     data: { user },
   } = await supabaseAuth.auth.getUser();
+function stripSourcesSectionForUser(text: string): string {
+  // Supprime sections "Sources" / "Sources citées" jusqu'à fin
+  return text.replace(/\n\*\*Sources[\s\S]*$/i, "").trim();
+}
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
   }
 
   const startedAt = Date.now();
-
+  
   // ✅ CRITIQUE: variables “parsedObj / followups” déclarées 1 fois, haut niveau (plus d’erreur “used before declared”)
   let parsedObj: ModelJson = { type: "answer", jurisdiction: "UNKNOWN" };
   let followups: string[] = [];
@@ -2184,12 +2272,27 @@ if (articleNum) {
       codeCandidates = canon;
     }
 
-    const directHits = await directArticleLookup({
-      supabase: supabaseAuth,
-      articleNum,
-      codeCandidates,
-      jurisdictionNorm: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
-    });
+  let directHits = await directArticleLookup({
+  supabase: supabaseAuth,
+  articleNum,
+  codeCandidates,
+  jurisdictionNorm: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
+});
+
+// Fallback: si le mapping était trop strict, on relance sans codeCandidates
+if (!directHits.length && (codeCandidates?.length ?? 0) > 0) {
+  directHits = await directArticleLookup({
+    supabase: supabaseAuth,
+    articleNum,
+    codeCandidates: [],
+    jurisdictionNorm: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
+  });
+}
+
+if (directHits.length) {
+  hybridHits = [...directHits, ...(hybridHits ?? [])];
+}
+
 
     if (directHits.length) {
       hybridHits = [...directHits, ...(hybridHits ?? [])];
@@ -2776,9 +2879,22 @@ RÈGLES:
     });
 
     if (mode === "prod") {
-      answer = ensureMinLength(answer, { message, gmode });
-      return json({ answer, sources, followups });
-    }
+  const body = (parsed1.answer_markdown ?? "").trim();
+
+  const followups = (parsed1.followups ?? []).slice(0, 3).filter((x) => typeof x === "string" && x.trim());
+
+  // On garde sourcesLines pour logs internes si tu veux,
+  // mais on ne les affiche plus au client.
+  // const sourcesLines = ...
+
+  return [
+    body || (parsed1.ilac ? parsed1.ilac.conclusion : "Je te réponds au mieux avec le corpus actuel."),
+    followups.length ? `\n\n**Si tu veux, je peux :**\n${followups.map((f) => `- ${f}`).join("\n")}` : "",
+  ]
+    .filter(Boolean)
+    .join("");
+}
+
 
     const had_qc_source = sources.some((s) => normalizeJurisdiction(s.jur ?? "") === "QC");
 
