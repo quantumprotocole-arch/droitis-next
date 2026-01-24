@@ -2025,6 +2025,8 @@ export async function POST(req: Request): Promise<Response> {
   const supabaseAuth = createClient();
   const supabaseAdmin = createServiceClient();
   const supabaseUser = createUserClient(); // si tu en as besoin ailleurs
+  const db = supabaseAdmin; // 🔒 toutes les lectures RAG passent par service_role (server-only)
+
 
   const {
     data: { user },
@@ -2185,7 +2187,7 @@ const explicitCodeHint = explicitRef?.code_id ?? null;
         supaGet,
         createEmbedding,
         microRetrieve: async (query_text, query_embedding) => {
-          const r = await hybridSearchWithRetry(supabaseAuth, {
+          const r = await hybridSearchWithRetry(db, {
             query_text,
             query_embedding,
             domain: "Inconnu",
@@ -2267,6 +2269,7 @@ const explicitCodeHint = explicitRef?.code_id ?? null;
       });
 
       hybridHits = r.hits;
+      console.log("[RAG] hybridHits", hybridHits?.length ?? 0);
       hybridError = r.hybridError;
       if (hybridError) console.warn("hybridSearchWithRetry failed:", hybridError);
     }
@@ -2285,16 +2288,18 @@ if (articleNum) {
       codeCandidates = [explicitCodeHint];
     } else if (course_slug && course_slug !== "general") {
       // sinon, on peut utiliser le cours comme préférence
-      const canon = await getCourseCanonicalCodes(supabaseAuth, course_slug);
+      const canon = await getCourseCanonicalCodes(db, course_slug);
       codeCandidates = canon;
     }
 
     const directHits = await directArticleLookup({
-      supabase: supabaseAuth,
+      
+      supabase: db,
       articleNum,
       codeCandidates: codeCandidates ?? [],
       jurisdictionNorm: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
     });
+console.log("[RAG] directHits", directHits?.length ?? 0, "articleNum", articleNum);
 
     if (directHits.length) {
       hybridHits = [...directHits, ...(hybridHits ?? [])];
