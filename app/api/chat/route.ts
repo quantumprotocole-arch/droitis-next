@@ -1946,14 +1946,36 @@ type LegalVectorRow = {
   jurisdiction_bucket: string | null;
 };
 
-// 2) Fetch candidates by citation match (fast path)
-const { data, error } = await supabase
-  .from("legal_vectors")
-  .select("id,code_id,citation,title,text,jurisdiction,jurisdiction_bucket")
-  .ilike("citation", `%${articleNum}%`)
-  .limit(20);
+// 2) Fetch candidates (prefer enriched MV by article_num when available)
+let data: LegalVectorRow[] | null = null;
 
-if (error || !data) return [];
+// Pass A: enriched MV/view (article_num) — best-effort, ignore if missing
+try {
+  const r = await supabase
+    .from("legal_vectors_enriched_mv" as any)
+    .select("id,code_id,citation,title,text,jurisdiction,jurisdiction_bucket")
+    .eq("article_num", String(articleNum))
+    .limit(30);
+
+  if (!r.error && Array.isArray(r.data) && r.data.length) {
+    data = r.data as any;
+  }
+} catch {
+  // ignore (table/view may not exist in some envs)
+}
+
+// Pass B: base table fallback (citation contains articleNum)
+if (!data) {
+  const r2 = await supabase
+    .from("legal_vectors")
+    .select("id,code_id,citation,title,text,jurisdiction,jurisdiction_bucket")
+    .ilike("citation", `%${articleNum}%`)
+    .limit(30);
+
+  if (r2.error || !r2.data) return [];
+  data = r2.data as any;
+}
+
 
 const rows = (data as LegalVectorRow[]).filter((r) => {
   // Jurisdiction filter
@@ -2049,8 +2071,11 @@ export async function POST(req: Request): Promise<Response> {
         { status: 400 }
       );
     }
-const artMatch = message.match(/\b(?:art\.?|article)\s*([0-9]{1,5})\b/i);
-const articleNum = artMatch?.[1] ?? null;
+const explicitRef = detectExplicitArticleRef(message);
+const artMatch = message.match(/\b(?:art\.?|article)\s*([0-9]{1,6}(?:\.\d+)*)\b/i);
+const articleNum = explicitRef?.article ?? artMatch?.[1] ?? null;
+const explicitCodeHint = explicitRef?.code_id ?? null;
+
 
     const course_slug =
       typeof body.course_slug === "string" && body.course_slug.trim() ? body.course_slug.trim() : "general";
@@ -2267,6 +2292,10 @@ if (articleNum) {
       codeCandidates,
       jurisdictionNorm: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
     });
+    // 🔒 Si l’utilisateur a explicitement écrit "LPC" ou "C.c.Q.", on force le code en mode general
+    if ((!codeCandidates || codeCandidates.length === 0) && explicitCodeHint) {
+      codeCandidates = [explicitCodeHint];
+    }
 
     // ✅ 2) Fallback: si mapping trop strict, relance sans contraintes
     if (!directHits.length && (codeCandidates?.length ?? 0) > 0) {
@@ -2291,7 +2320,7 @@ if (articleNum) {
     // ------------------------------
     // Strict article lock: if explicit “1457 CCQ/LPC”, avoid “noise” sources
     // ------------------------------
-    const explicitRef = detectExplicitArticleRef(message);
+    const explicitRef2 = detectExplicitArticleRef(message);
     const hasExplicitRef =
       /(art(?:icle)?\.?\s*)?\d{1,6}(?:\.\d+)*\s*(c\.?c\.?q|ccq|c\.c\.q|l\.?p\.?c|lpc)/i.test(message);
 
