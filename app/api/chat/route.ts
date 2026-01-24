@@ -2277,37 +2277,34 @@ const explicitCodeHint = explicitRef?.code_id ?? null;
 // ------------------------------
 // Direct article lookup (priority when explicit article is requested)
 // ------------------------------
+// ------------------------------
+// Course law mapping: BOOST ONLY (never exclude)
+// ------------------------------
 let preferredCodeIds: { strict: Set<string>; loose: Set<string> } | null = null;
 let ingestNeeded: string[] = [];
 
-if (articleNum) {
-  try {
-    // 1) Pour un article explicite avec code (CCQ/LPC), on BYPASS le mapping
-    let codeCandidates: string[] = [];
-    if (explicitCodeHint) {
-      codeCandidates = [explicitCodeHint];
-    } else if (course_slug && course_slug !== "general") {
-      // sinon, on peut utiliser le cours comme préférence
-      const canon = await getCourseCanonicalCodes(db, course_slug);
-      codeCandidates = canon;
-    }
+try {
+  // Si l'utilisateur a explicitement écrit CCQ/LPC, c'est la préférence #1
+  if (explicitRef?.code_id) {
+    preferredCodeIds = await expandAliases(supabaseAuth, [explicitRef.code_id]);
+  } else if (course_slug && course_slug !== "general") {
+    const canon = await getCourseCanonicalCodes(supabaseAuth, course_slug);
 
-    const directHits = await directArticleLookup({
-      
-      supabase: db,
-      articleNum,
-      codeCandidates: codeCandidates ?? [],
-      jurisdictionNorm: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
-    });
-console.log("[RAG] directHits", directHits?.length ?? 0, "articleNum", articleNum);
+    // IMPORTANT: si canon contient des slugs internes (pas des vrais code_id),
+    // on ne s'en sert PAS pour filtrer. On le garde seulement comme préférence.
+    if (canon?.length) preferredCodeIds = await expandAliases(supabaseAuth, canon);
 
-    if (directHits.length) {
-      hybridHits = [...directHits, ...(hybridHits ?? [])];
-    }
-  } catch (e: any) {
-    console.warn("directArticleLookup failed:", e?.message ?? e);
+    try {
+      ingestNeeded = await getIngestNeededForCourse(supabaseAuth, course_slug);
+    } catch {}
   }
+} catch (e: any) {
+  console.warn("course mapping (boost) failed:", e?.message ?? e);
 }
+
+// ✅ Ne jamais filtrer hybridHits ici.
+// Le boost se fait dans compositeFor via preferredCodeIds (prefBonus).
+
 
 
     // ------------------------------
@@ -2333,6 +2330,10 @@ try {
 }
 
 // IMPORTANT: on ne filtre JAMAIS hybridHits ici.
+// Safety: si jamais quelque chose a vidé les hits, on garde au moins les hits bruts
+if (!hybridHits || hybridHits.length === 0) {
+  console.warn("[RAG] hybridHits empty after mapping/locks");
+}
 
 
     // ------------------------------
