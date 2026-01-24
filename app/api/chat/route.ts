@@ -2271,88 +2271,64 @@ const explicitCodeHint = explicitRef?.code_id ?? null;
       if (hybridError) console.warn("hybridSearchWithRetry failed:", hybridError);
     }
 
-    // ------------------------------
-// Direct article lookup (priority if user explicitly asks an article number)
 // ------------------------------
+// Direct article lookup (priority when explicit article is requested)
 // ------------------------------
-// Direct article lookup (priority if user explicitly asks an article number)
-// ------------------------------
+let preferredCodeIds: { strict: Set<string>; loose: Set<string> } | null = null;
+let ingestNeeded: string[] = [];
+
 if (articleNum) {
   try {
+    // 1) Pour un article explicite avec code (CCQ/LPC), on BYPASS le mapping
     let codeCandidates: string[] = [];
-    if (course_slug && course_slug !== "general") {
+    if (explicitCodeHint) {
+      codeCandidates = [explicitCodeHint];
+    } else if (course_slug && course_slug !== "general") {
+      // sinon, on peut utiliser le cours comme préférence
       const canon = await getCourseCanonicalCodes(supabaseAuth, course_slug);
       codeCandidates = canon;
     }
 
-    // ✅ 1) Déclare directHits UNE fois, en let
-    let directHits = await directArticleLookup({
+    const directHits = await directArticleLookup({
       supabase: supabaseAuth,
       articleNum,
-      codeCandidates,
+      codeCandidates: codeCandidates ?? [],
       jurisdictionNorm: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
     });
-    // 🔒 Si l’utilisateur a explicitement écrit "LPC" ou "C.c.Q.", on force le code en mode general
-    if ((!codeCandidates || codeCandidates.length === 0) && explicitCodeHint) {
-      codeCandidates = [explicitCodeHint];
-    }
 
-    // ✅ 2) Fallback: si mapping trop strict, relance sans contraintes
-    if (!directHits.length && (codeCandidates?.length ?? 0) > 0) {
-      directHits = await directArticleLookup({
-        supabase: supabaseAuth,
-        articleNum,
-        codeCandidates: [],
-        jurisdictionNorm: jurisdiction_expected === "UNKNOWN" ? null : jurisdiction_expected,
-      });
-    }
-
-    // ✅ 3) Merge si hits
     if (directHits.length) {
       hybridHits = [...directHits, ...(hybridHits ?? [])];
     }
   } catch (e: any) {
-    console.warn("directArticleLookup error:", e?.message ?? e);
+    console.warn("directArticleLookup failed:", e?.message ?? e);
   }
 }
 
 
     // ------------------------------
-    // Strict article lock: if explicit “1457 CCQ/LPC”, avoid “noise” sources
-    // ------------------------------
-    const explicitRef2 = detectExplicitArticleRef(message);
-    const hasExplicitRef =
-      /(art(?:icle)?\.?\s*)?\d{1,6}(?:\.\d+)*\s*(c\.?c\.?q|ccq|c\.c\.q|l\.?p\.?c|lpc)/i.test(message);
-
-    // Note: directArticleLookup kept out here (you had it in your file, but it’s long).
-    // If you need it, re-plug it exactly as before.
-    // For now: only apply the “noise kill switch” when explicit ref + nothing relevant in hybridHits.
-    if (hasExplicitRef && explicitRef && hybridHits.length === 0) {
-      hybridHits = [];
-    }
-
-    // ------------------------------
     // Course law mapping: restrict sources to required codes (STRICT)
     // ------------------------------
-    let _allowedCodeIds: { strict: Set<string>; loose: Set<string> } | null = null;
-    let _ingestNeeded: string[] = [];
-    try {
-      if (course_slug && course_slug !== "general") {
-  const canon = await getCourseCanonicalCodes(supabaseAuth, course_slug);
-  _allowedCodeIds = await expandAliases(supabaseAuth, canon);
-  _ingestNeeded = await getIngestNeededForCourse(supabaseAuth, course_slug);
-}
-    } catch (e: any) {
-      console.warn("course mapping fetch failed:", e?.message ?? e);
-    }
+    // ------------------------------
+// Course law mapping: BOOST (never exclude)
+// ------------------------------
+preferredCodeIds = null;
+ingestNeeded = [];
 
-    if (_allowedCodeIds && (_allowedCodeIds.strict.size || _allowedCodeIds.loose.size)) {
-    hybridHits = (hybridHits ?? []).filter((h) => {
-    const vStrict = normCodeIdStrict(h.code_id);
-    const vLoose = normCodeIdLoose(h.code_id);
-    return _allowedCodeIds!.strict.has(vStrict) || _allowedCodeIds!.loose.has(vLoose);
-  });
+try {
+  // si user a écrit CCQ/LPC explicitement, c'est LA préférence #1
+  if (explicitCodeHint) {
+    preferredCodeIds = await expandAliases(supabaseAuth, [explicitCodeHint]);
+  } else if (course_slug && course_slug !== "general") {
+    const canon = await getCourseCanonicalCodes(supabaseAuth, course_slug);
+    if (canon?.length) preferredCodeIds = await expandAliases(supabaseAuth, canon);
+    ingestNeeded = await getIngestNeededForCourse(supabaseAuth, course_slug);
+  }
+} catch (e: any) {
+  console.warn("course mapping (boost) fetch failed:", e?.message ?? e);
 }
+
+// IMPORTANT: on ne filtre JAMAIS hybridHits ici.
+
 
     // ------------------------------
     // Distinctions (internal)
@@ -2398,23 +2374,30 @@ ${pits || "- (none)"}`;
     const seen = new Set<string>();
     const candidates: Cand[] = [];
 
-    const compositeFor = (h: HybridHit): { composite: number; overlap: number } => {
-      const sim =
-        typeof h.similarity === "number"
-          ? h.similarity
-          : typeof h.distance === "number"
-          ? Math.max(0, 1 - h.distance)
-          : null;
+const compositeFor = (h: HybridHit): { composite: number; overlap: number } => {
+  const sim =
+    typeof h.similarity === "number"
+      ? h.similarity
+      : typeof h.distance === "number"
+      ? Math.max(0, 1 - h.distance)
+      : null;
 
-      const sc = scoreHit({ row: h, expected: jurisdiction_expected, keywords, article, similarity: sim });
+  const sc = scoreHit({ row: h, expected: jurisdiction_expected, keywords, article, similarity: sim });
 
-      const rpcScore = typeof h.rrf_score === "number" ? h.rrf_score : typeof h.score === "number" ? h.score : 0;
-      const ftsBonus =
-        h.from_fts === true ? 0.08 : typeof h.fts_rank === "number" ? Math.min(0.08, Math.max(0, h.fts_rank) * 0.02) : 0;
+  const rpcScore = typeof h.rrf_score === "number" ? h.rrf_score : typeof h.score === "number" ? h.score : 0;
+  const ftsBonus =
+    h.from_fts === true ? 0.08 : typeof h.fts_rank === "number" ? Math.min(0.08, Math.max(0, h.fts_rank) * 0.02) : 0;
 
-      const composite = rpcScore * 0.9 + sc.hit_quality_score * 0.25 + (sim ?? 0) * 0.08 + ftsBonus;
-      return { composite, overlap: sc.overlap };
-    };
+  const pref =
+    preferredCodeIds &&
+    (preferredCodeIds.strict.has(normCodeIdStrict(h.code_id)) || preferredCodeIds.loose.has(normCodeIdLoose(h.code_id)));
+
+  const prefBonus = pref ? 0.35 : 0;
+
+  const composite = rpcScore * 0.9 + sc.hit_quality_score * 0.25 + (sim ?? 0) * 0.08 + ftsBonus + prefBonus;
+  return { composite, overlap: sc.overlap };
+};
+
 
     const goodThreshold = 1.25;
     const minGoodHits = 3;
@@ -2564,8 +2547,8 @@ ${pits || "- (none)"}`;
 
     const cov = computeCoverage({ domain: domain_detected, message, finalRows, jurisdiction_selected, gate });
 
-    if (Array.isArray(_ingestNeeded) && _ingestNeeded.length) {
-      cov.ingest_needed = _ingestNeeded.slice(0, 24);
+    if (Array.isArray(ingestNeeded) && ingestNeeded.length) {
+      cov.ingest_needed = ingestNeeded.slice(0, 24);
     }
 
     const coverage_ok = cov.coverage_ok;
