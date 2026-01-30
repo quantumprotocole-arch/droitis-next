@@ -736,6 +736,47 @@ function detectArticleMention(q: string): { mentioned: boolean; nums: string[] }
   while ((m = re.exec(s)) !== null) nums.push(m[1]);
   return { mentioned: nums.length > 0, nums };
 }
+type ExplicitRef = { idx: number; prefix: "art." | "s."; num: string; code: string };
+
+function extractExplicitRefs(message: string): ExplicitRef[] {
+  const s = message.replace(/\s+/g, " ").trim();
+
+  // Capture:
+  // - "art. 28 A-25"
+  // - "article 1457 C.c.Q."
+  // - "s. 163 S.C. 2019, c. 28, s. 1"
+  const re = /\b(art\.?|article|s\.)\s*([0-9][0-9A-Za-z.\-()]*)\s*([^;\n\r]{0,120})/gi;
+
+  const refs: ExplicitRef[] = [];
+  let m: RegExpExecArray | null;
+  let idx = 0;
+
+  while ((m = re.exec(s)) !== null) {
+    const rawPrefix = (m[1] ?? "").toLowerCase();
+    const prefix: "art." | "s." = rawPrefix.startsWith("s") ? "s." : "art.";
+    const num = String(m[2] ?? "").trim();
+
+    let tail = String(m[3] ?? "").trim();
+
+    // Nettoyage: on coupe à la fin de segment logique (évite d’embarquer toute la phrase)
+    // Ex: "A-25 sur ..." -> "A-25"
+    tail = tail
+      .replace(/^[,:)\]]+/, "")
+      .split(" - ")[0]
+      .split(" — ")[0]
+      .split(" (")[0]
+      .split(". ")[0]
+      .trim();
+
+    // Si l’utilisateur ne précise pas de code/loi -> code vide => fallback "article-only"
+    const code = tail;
+
+    refs.push({ idx, prefix, num, code });
+    idx++;
+  }
+
+  return refs;
+}
 
 function expandQuery(message: string, baseKeywords: string[], expected: Jurisdiction, unionAssumed: boolean) {
   const s = message.toLowerCase();
@@ -2252,27 +2293,74 @@ const explicitCodeHint = explicitRef?.code_id ?? null;
     const { keywords } = expandQuery(expanded, baseKeywords, jurisdiction_expected, gate.assumptions.union_assumed);
     const article = detectArticleMention(message);
 
+// ------------------------------
+// Golden path: exact lookup refs (ROI #1)
+// ------------------------------
+let exactHits: HybridHit[] = [];
+
+try {
+  const refs = extractExplicitRefs(message);
+
+  if (refs.length > 0) {
+    // IMPORTANT: utiliser db/service_role (pas supabaseAuth) pour éviter RLS=0 hit en runtime
+    const rows = await callRpc<any>(db as any, "exact_lookup_refs_v1", {
+      refs,
+      max_hits: Math.max(8, top_k * 2),
+    });
+
+    if (rows?.length) {
+      exactHits = rows.map((r: any) => ({
+        id: Number(r.legal_vector_id ?? r.id ?? 0),
+        code_id: String(r.code_id ?? ""),
+        citation: String(r.citation ?? ""),
+        title: String(r.title ?? ""),
+        text: String(r.text ?? ""),
+        jurisdiction_norm: String(r.jurisdiction ?? "").toUpperCase(),
+        code_id_struct: null,
+        article_num: String(r.input_num ?? ""),
+        url_struct: null,
+
+        // priorité très haute: direct lookup
+        fts_rank: 999,
+        rrf_score: 999,
+        similarity: 1,
+        distance: 0,
+      }));
+    }
+  }
+} catch (e: any) {
+  console.warn("[GOLDEN] exact_lookup_refs_v1 failed:", e?.message ?? e);
+}
+
+
+
     // ------------------------------
     // Hybrid search (retry)
     // ------------------------------
     let hybridHits: HybridHit[] = [];
     let hybridError: string | null = null;
 
-    {
-      const r = await hybridSearchWithRetry(supabaseAuth, {
-        query_text: expanded,
-        query_embedding: queryEmbedding,
-        domain: domain_detected,
-        gate,
-        jurisdiction_expected,
-        goal_mode: gmode,
-      });
+ // Si on a des hits exacts: on court-circuite le RAG (golden path)
+if (exactHits.length > 0) {
+  hybridHits = exactHits;
+  hybridError = null;
+  console.log("[GOLDEN] exactHits", exactHits.length);
+} else {
+  const r = await hybridSearchWithRetry(db as any, {
+    query_text: expanded,
+    query_embedding: queryEmbedding,
+    domain: domain_detected,
+    gate,
+    jurisdiction_expected,
+    goal_mode: gmode,
+  });
 
-      hybridHits = r.hits;
-      console.log("[RAG] hybridHits", hybridHits?.length ?? 0);
-      hybridError = r.hybridError;
-      if (hybridError) console.warn("hybridSearchWithRetry failed:", hybridError);
-    }
+  hybridHits = r.hits;
+  console.log("[RAG] hybridHits", hybridHits?.length ?? 0);
+  hybridError = r.hybridError;
+  if (hybridError) console.warn("hybridSearchWithRetry failed:", hybridError);
+}
+
 
 // ------------------------------
 // Direct article lookup (priority when explicit article is requested)
@@ -2319,12 +2407,14 @@ ingestNeeded = [];
 try {
   // si user a écrit CCQ/LPC explicitement, c'est LA préférence #1
   if (explicitCodeHint) {
-    preferredCodeIds = await expandAliases(supabaseAuth, [explicitCodeHint]);
+    preferredCodeIds = await expandAliases(db as any, [explicitCodeHint]);
   } else if (course_slug && course_slug !== "general") {
-    const canon = await getCourseCanonicalCodes(supabaseAuth, course_slug);
+
+    const canon = await getCourseCanonicalCodes(db as any, course_slug);
     if (canon?.length) preferredCodeIds = await expandAliases(supabaseAuth, canon);
-    ingestNeeded = await getIngestNeededForCourse(supabaseAuth, course_slug);
+    ingestNeeded = await getIngestNeededForCourse(db as any, course_slug);
   }
+  
 } catch (e: any) {
   console.warn("course mapping (boost) fetch failed:", e?.message ?? e);
 }
