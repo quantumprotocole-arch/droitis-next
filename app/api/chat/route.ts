@@ -1412,7 +1412,8 @@ type CodeIdSets = { strict: Set<string>; loose: Set<string> };
 async function expandAliases(
   supabase: ReturnType<typeof createClient>,
   canonicalCodes: string[]
-): Promise<CodeIdSets> {
+): Promise<{ strict: Set<string>; loose: Set<string> }> {
+
   const strict = new Set<string>();
   const loose = new Set<string>();
 
@@ -1423,24 +1424,29 @@ async function expandAliases(
     loose.add(normCodeIdLoose(raw));
   };
 
-  // inclure les codes fournis (canon) en strict+loose
-  for (const c of canonicalCodes ?? []) addBoth(c);
+  if (!canonicalCodes?.length) {
+    return { strict, loose };
+  }
 
-  if (!canonicalCodes?.length) return { strict, loose };
+  // 1️⃣ Toujours inclure les canon fournis
+  for (const c of canonicalCodes) {
+    addBoth(c);
+  }
 
+  // 2️⃣ Aller chercher les alias depuis code_aliases_v3
   const { data, error } = await supabase
-    .from("code_aliases")
-    .select("canonical_code,aliases")
-    .in("canonical_code", canonicalCodes);
+    .from("code_aliases_v3")
+    .select("code_id, alias_raw")
+    .in("code_id", canonicalCodes);
 
-  if (error || !data) return { strict, loose };
+  if (error) {
+    console.warn("expandAliases v3 error:", error);
+    return { strict, loose };
+  }
 
-  for (const row of data as any[]) {
-    addBoth(row?.canonical_code);
-    const aliases = row?.aliases;
-    if (Array.isArray(aliases)) {
-      for (const a of aliases) addBoth(a);
-    }
+  for (const row of data ?? []) {
+    addBoth(row.code_id);
+    addBoth(row.alias_raw);
   }
 
   return { strict, loose };
@@ -1559,7 +1565,7 @@ Ta mission: produire une réponse **utile, rigoureuse, pédagogique, et contrôl
 - Le Canada est **bijuridique**: droit civil (Québec) et common law (autres provinces). En matière de propriété et droits civils, le droit fédéral s’interprète en reconnaissant l’autorité égale des deux traditions (lecture bijuridique).  
 - Donc:
   (A) Si la juridiction = QC → raisonne d’abord en **droit civil québécois** (Code civil, lois QC, concepts civilistes).
-  (B) Si la juridiction = CA-FED → raisonne en droit fédéral, tout en respectant le **cadre bijuridique** lorsqu’un concept de droit privé est en jeu (propriété/droits civils).
+  (B) Si la juridiction = CA-FED ou CA → raisonne en droit fédéral, tout en respectant le **cadre bijuridique** lorsqu’un concept de droit privé est en jeu (propriété/droits civils).
   (C) Si la juridiction est verrouillée (lock=true) → tu n’as PAS le droit d’appliquer un autre régime “par défaut”.
 
 - Tu dois annoncer la juridiction applicable **en une courte phrase** au début de la réponse (style naturel), sans afficher de debug.
