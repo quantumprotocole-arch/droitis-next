@@ -124,11 +124,23 @@ async function safeJson(res: Response) {
 }
 
 function normalizeJurisdiction(j: string | null | undefined): Jurisdiction | "OTHER" {
-  const s = (j ?? "").toUpperCase();
-  if (s === "QC") return "QC";
-  if (s === "CA-FED" || s === "CA" || s.includes("CANADA")) return "CA-FED";
-  if (s.includes("QUEBEC") || s.includes("QUÉBEC")) return "QC";
+  const s = (j ?? "").toUpperCase().trim();
+  if (!s) return "OTHER";
+  if (s === "QC" || s.includes("QUEBEC") || s.includes("QUÉBEC")) return "QC";
+  if (s === "CA-FED" || s === "CA" || s === "FEDERAL" || s.includes("CANADA")) return "CA-FED";
   return "OTHER";
+}
+
+function matchesJurisdiction(
+  jurisdiction: string | null | undefined,
+  jurisdictionBucket: string | null | undefined,
+  selected: string | null | undefined
+): boolean {
+  const j = normalizeJurisdiction(jurisdiction);
+  const jb = normalizeJurisdiction(jurisdictionBucket);
+  const s = normalizeJurisdiction(selected);
+  if (!s || s === "OTHER") return true;
+  return j === s || jb === s;
 }
 
 function isStatementTimeout(errMsg: string) {
@@ -1333,7 +1345,7 @@ async function hybridSearchWithRetry(
         query_embedding,
         match_count: a.match_count,
         filter_jurisdiction_norm: a.filter_jurisdiction_norm,
-        filter_bucket: null, // IMPORTANT : ne pas confondre bucket et juridiction
+        filter_bucket: narrowedJur, // robustesse: on passe aussi le bucket si la RPC le supporte
       });
 
       return { hits, hybridError: null };
@@ -1452,6 +1464,32 @@ async function expandAliases(
   return { strict, loose };
 }
 
+
+async function getCourseCodeBoostMap(
+  supabase: ReturnType<typeof createClient>,
+  course_slug: string
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!course_slug || course_slug === "general") return out;
+
+  const { data, error } = await supabase
+    .from("course_code_boosts_v1")
+    .select("code_id,bonus")
+    .eq("course_slug", course_slug);
+
+  if (error) {
+    console.warn("course_code_boosts_v1 read failed:", error.message ?? error);
+    return out;
+  }
+
+  for (const r of data ?? []) {
+    const code = normCodeIdStrict(String((r as any).code_id ?? ""));
+    const bonus = Number((r as any).bonus ?? 0);
+    if (!code || !Number.isFinite(bonus)) continue;
+    out.set(code, bonus);
+  }
+  return out;
+}
 
 async function getIngestNeededForCourse(supabase: ReturnType<typeof createClient>, course_slug: string): Promise<string[]> {
   const { data, error } = await supabase.from("course_law_requirements").select("law_key,canonical_code_id,status").eq("course_slug", course_slug);
@@ -2026,7 +2064,7 @@ if (!data) {
 
 const rows = (data as LegalVectorRow[]).filter((r) => {
   // Jurisdiction filter
-  if (jurisdictionNorm && String(r.jurisdiction ?? "").toUpperCase() !== jurisdictionNorm.toUpperCase()) {
+  if (!matchesJurisdiction(r.jurisdiction, r.jurisdiction_bucket, jurisdictionNorm)) {
     return false;
   }
 
@@ -2053,7 +2091,7 @@ const rows = (data as LegalVectorRow[]).filter((r) => {
     jurisdiction_bucket: String(r.jurisdiction_bucket ?? ""),
 
     // Champs exigés par EnrichedRow/HybridHit (complétés ici)
-    jurisdiction_norm: String(r.jurisdiction ?? "").toUpperCase(),
+    jurisdiction_norm: String(r.jurisdiction_bucket ?? r.jurisdiction ?? "").toUpperCase(),
     code_id_struct: null,
     article_num: String(articleNum),
     url_struct: null,
@@ -2321,7 +2359,7 @@ try {
         citation: String(r.citation ?? ""),
         title: String(r.title ?? ""),
         text: String(r.text ?? ""),
-        jurisdiction_norm: String(r.jurisdiction ?? "").toUpperCase(),
+        jurisdiction_norm: String(r.jurisdiction_bucket ?? r.jurisdiction ?? "").toUpperCase(),
         code_id_struct: null,
         article_num: String(r.input_num ?? ""),
         url_struct: null,
@@ -2338,6 +2376,24 @@ try {
   console.warn("[GOLDEN] exact_lookup_refs_v1 failed:", e?.message ?? e);
 }
 
+// Fallback robuste: si un article explicite est demandé mais que le golden path RPC ne renvoie rien,
+// on tente un lookup direct dans legal_vectors / legal_vectors_enriched_mv.
+if (exactHits.length === 0 && articleNum) {
+  try {
+    const directHits = await directArticleLookup({
+      supabase: db as any,
+      articleNum,
+      codeCandidates: explicitCodeHint ? [explicitCodeHint] : [],
+      jurisdictionNorm: jurisdiction_expected !== "UNKNOWN" ? jurisdiction_expected : null,
+    });
+    if (directHits.length > 0) {
+      exactHits = directHits;
+      console.log("[GOLDEN] directArticleLookup hits", directHits.length);
+    }
+  } catch (e: any) {
+    console.warn("[GOLDEN] directArticleLookup failed:", e?.message ?? e);
+  }
+}
 
 
     // ------------------------------
@@ -2375,6 +2431,7 @@ if (exactHits.length > 0) {
 // Course law mapping: BOOST ONLY (never exclude)
 // ------------------------------
 let preferredCodeIds: { strict: Set<string>; loose: Set<string> } | null = null;
+let courseCodeBoosts = new Map<string, number>();
 let ingestNeeded: string[] = [];
 
 try {
@@ -2390,6 +2447,7 @@ try {
 
     try {
       ingestNeeded = await getIngestNeededForCourse(supabaseAuth, course_slug);
+      courseCodeBoosts = await getCourseCodeBoostMap(supabaseAuth, course_slug);
     } catch {}
   }
 } catch (e: any) {
@@ -2408,6 +2466,7 @@ try {
 // Course law mapping: BOOST (never exclude)
 // ------------------------------
 preferredCodeIds = null;
+courseCodeBoosts = new Map<string, number>();
 ingestNeeded = [];
 
 try {
@@ -2419,6 +2478,7 @@ try {
     const canon = await getCourseCanonicalCodes(db as any, course_slug);
     if (canon?.length) preferredCodeIds = await expandAliases(supabaseAuth, canon);
     ingestNeeded = await getIngestNeededForCourse(db as any, course_slug);
+    courseCodeBoosts = await getCourseCodeBoostMap(db as any, course_slug);
   }
   
 } catch (e: any) {
@@ -2494,9 +2554,20 @@ const compositeFor = (h: HybridHit): { composite: number; overlap: number } => {
     preferredCodeIds &&
     (preferredCodeIds.strict.has(normCodeIdStrict(h.code_id)) || preferredCodeIds.loose.has(normCodeIdLoose(h.code_id)));
 
-  const prefBonus = pref ? 0.35 : 0;
+  const prefBonus = pref ? 0.18 : 0;
 
-  const composite = rpcScore * 0.9 + sc.hit_quality_score * 0.25 + (sim ?? 0) * 0.08 + ftsBonus + prefBonus;
+  const codeStrict = normCodeIdStrict(h.code_id);
+  const rawCourseBoost = courseCodeBoosts.get(codeStrict) ?? 0;
+  const courseBoost = Math.min(0.7, Math.max(0, rawCourseBoost) * 0.35);
+
+  const composite =
+    rpcScore * 0.9 +
+    sc.hit_quality_score * 0.25 +
+    (sim ?? 0) * 0.08 +
+    ftsBonus +
+    prefBonus +
+    courseBoost;
+
   return { composite, overlap: sc.overlap };
 };
 
