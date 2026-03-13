@@ -1302,6 +1302,68 @@ async function hybridSearchRPC(
   }
 }
 
+async function resolveCodeMentions(
+  supabase: ReturnType<typeof createClient>,
+  message: string,
+  limit = 8
+): Promise<string[]> {
+  try {
+    const rows = await callRpc<any>(supabase, "resolve_code_mentions_v1", {
+      p_message: message,
+      p_limit: limit,
+    });
+    const uniq = new Set<string>();
+    for (const r of rows ?? []) {
+      const v = String(r.code_id ?? "").trim();
+      if (v) uniq.add(v);
+    }
+    return Array.from(uniq);
+  } catch (e: any) {
+    console.warn("resolve_code_mentions_v1 failed:", e?.message ?? e);
+    return [];
+  }
+}
+
+async function lookupArticleFallbackRPC(args: {
+  supabase: ReturnType<typeof createClient>;
+  articleNum: string;
+  codeCandidates: string[];
+  jurisdictionNorm: string | null;
+  matchCount: number;
+}): Promise<HybridHit[]> {
+  const { supabase, articleNum, codeCandidates, jurisdictionNorm, matchCount } = args;
+
+  try {
+    const rows = await callRpc<any>(supabase, "exact_lookup_article_fallback_v1", {
+      p_article_num: articleNum,
+      p_code_candidates: codeCandidates?.length ? codeCandidates : null,
+      p_jurisdiction_norm: jurisdictionNorm,
+      p_limit: matchCount,
+    });
+
+    return (rows ?? []).map((r: any) => ({
+      id: Number(r.legal_vector_id ?? r.id ?? 0),
+      code_id: String(r.code_id ?? ""),
+      citation: String(r.citation ?? ""),
+      title: String(r.title ?? ""),
+      text: String(r.text ?? ""),
+      jurisdiction: String(r.jurisdiction ?? ""),
+      jurisdiction_bucket: String(r.jurisdiction_bucket ?? ""),
+      jurisdiction_norm: String(r.jurisdiction_bucket ?? r.jurisdiction ?? "").toUpperCase(),
+      code_id_struct: null,
+      article_num: String(r.input_num ?? ""),
+      url_struct: null,
+      fts_rank: 999,
+      rrf_score: 999,
+      similarity: 1,
+      distance: 0,
+    }));
+  } catch (e: any) {
+    console.warn("exact_lookup_article_fallback_v1 failed:", e?.message ?? e);
+    return [];
+  }
+}
+
 /** Wrapper anti-timeout. */
 async function hybridSearchWithRetry(
   supabase: ReturnType<typeof createClient>,
@@ -2051,14 +2113,52 @@ try {
 
 // Pass B: base table fallback (citation contains articleNum)
 if (!data) {
-  const r2 = await supabase
-    .from("legal_vectors")
-    .select("id,code_id,citation,title,text,jurisdiction,jurisdiction_bucket")
-    .ilike("citation", `%${articleNum}%`)
-    .limit(30);
+  const tries = [
+    () =>
+      supabase
+        .from("legal_vectors")
+        .select("id,code_id,citation,title,text,jurisdiction,jurisdiction_bucket")
+        .ilike("citation", `%art.%${articleNum}%`)
+        .limit(30),
 
-  if (r2.error || !r2.data) return [];
-  data = r2.data as any;
+    () =>
+      supabase
+        .from("legal_vectors")
+        .select("id,code_id,citation,title,text,jurisdiction,jurisdiction_bucket")
+        .ilike("citation", `%article ${articleNum}%`)
+        .limit(30),
+
+    () =>
+      supabase
+        .from("legal_vectors")
+        .select("id,code_id,citation,title,text,jurisdiction,jurisdiction_bucket")
+        .ilike("citation", `%${articleNum}%`)
+        .limit(30),
+
+    () =>
+      supabase
+        .from("legal_vectors")
+        .select("id,code_id,citation,title,text,jurisdiction,jurisdiction_bucket")
+        .ilike("title", `%${articleNum}%`)
+        .limit(30),
+
+    () =>
+      supabase
+        .from("legal_vectors")
+        .select("id,code_id,citation,title,text,jurisdiction,jurisdiction_bucket")
+        .ilike("text", `%article ${articleNum}%`)
+        .limit(30),
+  ];
+
+  for (const run of tries) {
+    const r2 = await run();
+    if (!r2.error && Array.isArray(r2.data) && r2.data.length > 0) {
+      data = r2.data as any;
+      break;
+    }
+  }
+
+  if (!data) return [];
 }
 
 
@@ -2375,23 +2475,40 @@ try {
 } catch (e: any) {
   console.warn("[GOLDEN] exact_lookup_refs_v1 failed:", e?.message ?? e);
 }
-
 // Fallback robuste: si un article explicite est demandé mais que le golden path RPC ne renvoie rien,
-// on tente un lookup direct dans legal_vectors / legal_vectors_enriched_mv.
+// on tente d'abord un RPC DB spécialisé, puis un fallback direct sur legal_vectors.
 if (exactHits.length === 0 && articleNum) {
   try {
-    const directHits = await directArticleLookup({
+    const mentionedCodeIds = explicitCodeHint
+      ? [explicitCodeHint]
+      : await resolveCodeMentions(db as any, message, 8);
+
+    const rpcFallbackHits = await lookupArticleFallbackRPC({
       supabase: db as any,
       articleNum,
-      codeCandidates: explicitCodeHint ? [explicitCodeHint] : [],
+      codeCandidates: mentionedCodeIds,
       jurisdictionNorm: jurisdiction_expected !== "UNKNOWN" ? jurisdiction_expected : null,
+      matchCount: Math.max(8, top_k * 2),
     });
-    if (directHits.length > 0) {
-      exactHits = directHits;
-      console.log("[GOLDEN] directArticleLookup hits", directHits.length);
+
+    if (rpcFallbackHits.length > 0) {
+      exactHits = rpcFallbackHits;
+      console.log("[GOLDEN] exact_lookup_article_fallback_v1 hits", rpcFallbackHits.length);
+    } else {
+      const directHits = await directArticleLookup({
+        supabase: db as any,
+        articleNum,
+        codeCandidates: mentionedCodeIds,
+        jurisdictionNorm: jurisdiction_expected !== "UNKNOWN" ? jurisdiction_expected : null,
+      });
+
+      if (directHits.length > 0) {
+        exactHits = directHits;
+        console.log("[GOLDEN] directArticleLookup hits", directHits.length);
+      }
     }
   } catch (e: any) {
-    console.warn("[GOLDEN] directArticleLookup failed:", e?.message ?? e);
+    console.warn("[GOLDEN] article fallback chain failed:", e?.message ?? e);
   }
 }
 
